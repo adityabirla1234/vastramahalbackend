@@ -1,0 +1,89 @@
+package com.rentalshop.backend.repository;
+
+import com.rentalshop.backend.entity.Booking;
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
+
+import java.time.LocalDate;
+import java.util.List;
+import java.util.Optional;
+
+public interface BookingRepository extends JpaRepository<Booking, Long> {
+
+    Optional<Booking> findByIdempotencyKey(String idempotencyKey);
+
+    Optional<Booking> findByBookingNumber(String bookingNumber);
+    @Query("""
+       select b from Booking b
+       join fetch b.item
+       join fetch b.customer
+       where b.id = :id
+       """)
+    Optional<Booking> findByIdWithDetails(@Param("id") Long id);
+
+    /**
+     * Section 3.8 overlap rule: existingStart <= requestedEnd AND existingEnd >= requestedStart.
+     * Only bookings in a calendar-occupying status are considered (Cancelled bookings
+     * release their dates immediately per Section 14, rule 6; Returned bookings don't
+     * block future dates per rule 7).
+     *
+     * excludeBookingId is used when re-validating an existing booking's own date
+     * edit, so it doesn't conflict with itself. Pass -1L (or any impossible id)
+     * when creating a brand-new booking.
+     */
+    @Query("""
+           select b from Booking b
+           where b.item.id = :itemId
+             and b.status in ('PENDING', 'CONFIRMED', 'PICKED_UP')
+             and b.id <> :excludeBookingId
+             and b.pickupDate <= :requestedEnd
+             and b.returnDate >= :requestedStart
+           """)
+    List<Booking> findOverlapping(@Param("itemId") Long itemId,
+                                   @Param("requestedStart") LocalDate requestedStart,
+                                   @Param("requestedEnd") LocalDate requestedEnd,
+                                   @Param("excludeBookingId") Long excludeBookingId);
+
+    /**
+     * Section 3.6 availability search: items with NO overlapping booking in the
+     * requested range are available. Used as an anti-join from the item side —
+     * see AvailabilityService (not included in this scaffold) for the full query
+     * that combines this with the items table.
+     */
+    @Query("""
+           select b.item.id from Booking b
+           where b.status in ('PENDING', 'CONFIRMED', 'PICKED_UP')
+             and b.pickupDate <= :requestedEnd
+             and b.returnDate >= :requestedStart
+           """)
+    List<Long> findBookedItemIdsInRange(@Param("requestedStart") LocalDate requestedStart,
+                                         @Param("requestedEnd") LocalDate requestedEnd);
+
+    /**
+     * Backs GET /api/bookings (All Bookings / Returns / Item Calendar /
+     * Customer History screens -- none built yet, but all four need the
+     * same filtered list underneath). Every filter is optional: a null
+     * parameter is matched with `:param is null or ...`, so passing all
+     * nulls returns every booking, sorted soonest-pickup-first.
+     *
+     * [dueOnOrBefore] is specifically for a "Returns due" view: bookings
+     * still occupying the calendar (not yet RETURNED/CANCELLED) whose
+     * returnDate has arrived or passed. Left null for a plain filtered list.
+     */
+    @Query("""
+       select b from Booking b
+       join fetch b.item
+       join fetch b.customer
+       where (:status is null or b.status = :status)
+         and (:itemId is null or b.item.id = :itemId)
+         and (:customerId is null or b.customer.id = :customerId)
+         and (:dueOnOrBefore is null or
+              (b.status in ('PENDING', 'CONFIRMED', 'PICKED_UP') and b.returnDate <= :dueOnOrBefore))
+       order by b.pickupDate asc
+       """)
+    List<Booking> search(@Param("status") Booking.BookingStatus status,
+                         @Param("itemId") Long itemId,
+                         @Param("customerId") Long customerId,
+                         @Param("dueOnOrBefore") LocalDate dueOnOrBefore);
+}

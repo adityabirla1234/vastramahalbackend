@@ -1,0 +1,68 @@
+name: Keep-alive ping
+
+# Section 5 / 13, and the comment in WebMvcConfig.addInterceptors: most
+# free-tier hosts (Render/Railway/etc, same ones called out in
+# application.yml's storage/datasource comments) spin the whole process
+# down after ~15 minutes of no inbound traffic, and the NEXT request pays a
+# multi-second-to-tens-of-seconds cold start. With 3 owners occasionally
+# opening the app during a slow afternoon, that cold start would otherwise
+# land on whichever owner happens to open it first.
+#
+# This workflow is the "external keep-alive cron" that comment refers to:
+# it just curls /actuator/health on a schedule so the host never sees a
+# long enough gap to sleep. It deliberately does NOT run inside the backend
+# itself (a self-scheduled @Scheduled job can't wake up a process that's
+# already asleep -- it would need to already be running to fire).
+#
+# Setup: add a repository variable named BACKEND_HEALTH_URL (Settings ->
+# Secrets and variables -> Actions -> Variables) pointing at your deployed
+# backend, e.g. https://your-app.onrender.com/actuator/health. Not a
+# *secret* -- the health endpoint is intentionally public (WebMvcConfig
+# excludes it from /api/** auth) and show-details is set to "never", so
+# there's nothing sensitive in the URL or response to protect.
+#
+# Caveat worth knowing about (not fixable from this file): GitHub
+# auto-disables a scheduled workflow after 60 days with no other repo
+# activity, and scheduled runs can silently run late under GitHub's own
+# load. For a shop that can't afford a gap, pair this with a second, truly
+# independent free pinger (UptimeRobot / cron-job.org / healthchecks.io)
+# hitting the same URL -- redundant is fine here, unlike the Layer 2/3
+# backup trails elsewhere in the plan, since a keep-alive ping has no
+# side effect to worry about duplicating.
+
+on:
+  schedule:
+    # Every 10 minutes -- comfortably under most free-tier idle-timeout
+    # windows (commonly ~15 min) with margin for a late/skipped run.
+    # GitHub Actions cron is UTC and best-effort timing, not exact.
+    - cron: '*/10 * * * *'
+  workflow_dispatch: {}   # lets you trigger a one-off run manually from the Actions tab to sanity-check setup
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping health endpoint
+        env:
+          HEALTH_URL: ${{ vars.BACKEND_HEALTH_URL }}
+        run: |
+          if [ -z "$HEALTH_URL" ]; then
+            echo "::error::BACKEND_HEALTH_URL repository variable is not set. Settings -> Secrets and variables -> Actions -> Variables."
+            exit 1
+          fi
+
+          echo "Pinging $HEALTH_URL"
+          # -f: fail (non-zero exit) on HTTP >= 400, so a sleeping/misconfigured
+          # host fails this step instead of silently "succeeding" on an error page.
+          # -sS: silent but still show errors. --max-time: don't hang forever
+          # waiting out a cold start that never resolves.
+          response=$(curl -fsS --max-time 30 "$HEALTH_URL")
+          echo "Response: $response"
+
+          status=$(echo "$response" | grep -o '"status"[[:space:]]*:[[:space:]]*"[A-Z]*"' | grep -o '"[A-Z]*"$' | tr -d '"')
+          if [ "$status" != "UP" ]; then
+            echo "::error::Health check did not report UP (got: '$status')"
+            exit 1
+          fi
+
+          echo "Backend is UP."
