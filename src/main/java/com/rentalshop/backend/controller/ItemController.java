@@ -56,8 +56,9 @@ public class ItemController {
     /**
      * Inventory list screen. category/status are optional filters;
      * includeDeleted defaults to false and should only be set true from an
-     * explicit "show retired items" admin view. Images are intentionally
-     * NOT included per row here — see ItemResponse's Javadoc.
+     * explicit "show retired items" admin view. The full photo gallery is
+     * intentionally NOT included per row here — only a bulk-resolved
+     * primaryImageUrl for the grid thumbnail — see ItemResponse's Javadoc.
      */
     @GetMapping
     public ResponseEntity<List<ItemResponse>> list(
