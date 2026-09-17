@@ -14,6 +14,7 @@ import java.util.Base64;
 import java.util.List;
 import java.util.Objects;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
@@ -66,7 +67,7 @@ public class ImageKitObjectStorageService implements ObjectStorageService {
     private final String privateKey;
     private final String urlEndpoint;
     private final String authHeader;
-
+@Autowired
     public ImageKitObjectStorageService(
             @Value("${app.storage.imagekit.private-key}") String privateKey,
             @Value("${app.storage.imagekit.url-endpoint}") String urlEndpoint) {
