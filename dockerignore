@@ -1,0 +1,15 @@
+target/
+.idea/
+.settings/
+.git/
+.gitignore
+.gitattributes
+.env
+.env.example
+*.iml
+.classpath
+.factorypath
+.project
+HELP.md
+.github/
+.mvn/wrapper/maven-wrapper.jar
