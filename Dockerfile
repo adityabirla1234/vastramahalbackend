@@ -36,4 +36,9 @@ EXPOSE 8080
 # that default guess can be too generous, letting the JVM get killed by the
 # host before it ever prints a clean OutOfMemoryError. Tune these to roughly
 # 70-75% of whatever the Render plan's RAM actually is.
-ENTRYPOINT ["java", "-Xmx384m", "-XX:MaxMetaspaceSize=192m", "-jar", "/app/app.jar"]
+# TieredStopAtLevel=1 skips the JIT's optimizing compiler tiers -- trades
+# steady-state peak performance (irrelevant for a low-traffic shop app) for
+# faster startup, which matters on a CPU-throttled free instance. Xshare=auto
+# turns on Class Data Sharing when the JDK image has an archive available,
+# speeding up class loading at no cost.
+ENTRYPOINT ["java", "-Xmx384m", "-XX:MaxMetaspaceSize=192m", "-XX:TieredStopAtLevel=1", "-Xshare:auto", "-jar", "/app/app.jar"]
