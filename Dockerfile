@@ -29,4 +29,11 @@ USER spring
 
 EXPOSE 8080
 
-ENTRYPOINT ["java", "-jar", "/app/app.jar"]
+# Explicit heap/metaspace caps instead of relying on the JVM's container-aware
+# auto-sizing (~25% of the cgroup limit by default) -- firebase-admin (gRPC +
+# Netty), webp-imageio's native binding, mysql-connector-j, and full
+# Hibernate/JPA all classload during startup, and on Render's smaller tiers
+# that default guess can be too generous, letting the JVM get killed by the
+# host before it ever prints a clean OutOfMemoryError. Tune these to roughly
+# 70-75% of whatever the Render plan's RAM actually is.
+ENTRYPOINT ["java", "-Xmx384m", "-XX:MaxMetaspaceSize=192m", "-jar", "/app/app.jar"]
