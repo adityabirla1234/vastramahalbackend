@@ -4,12 +4,16 @@ import com.rentalshop.backend.dto.CreateItemRequest;
 import com.rentalshop.backend.dto.ItemResponse;
 import com.rentalshop.backend.dto.UpdateItemRequest;
 import com.rentalshop.backend.entity.Item;
+import com.rentalshop.backend.repository.ItemImageRepository;
 import com.rentalshop.backend.repository.ItemRepository;
+import com.rentalshop.backend.service.storage.ObjectStorageService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
  * Full product CRUD (development plan: "Full product CRUD (create/edit/delete)").
@@ -21,6 +25,8 @@ import java.util.List;
 public class ItemService {
 
     private final ItemRepository itemRepository;
+    private final ItemImageRepository itemImageRepository;
+    private final ObjectStorageService objectStorageService;
     private final AuditLogService auditLogService;
 
     @Transactional
@@ -101,8 +107,23 @@ public class ItemService {
 
     @Transactional(readOnly = true)
     public List<ItemResponse> listItems(String category, Item.ItemStatus status, boolean includeDeleted) {
-        return itemRepository.search(category, status, includeDeleted).stream()
-                .map(ItemResponse::from)
+        List<Item> items = itemRepository.search(category, status, includeDeleted);
+        if (items.isEmpty()) {
+            return List.of();
+        }
+
+        // One bulk query for the whole page's primary-image keys, resolved to
+        // public URLs, rather than a per-row lookup -- keeps this endpoint's
+        // "no per-row image cost" guarantee (see ItemResponse's Javadoc) while
+        // still giving the Inventory grid a thumbnail to show.
+        List<Long> ids = items.stream().map(Item::getId).toList();
+        Map<Long, String> primaryImageUrlByItemId = itemImageRepository.findPrimaryImageKeysForItems(ids).stream()
+                .collect(Collectors.toMap(
+                        ItemImageRepository.PrimaryImageProjection::getItemId,
+                        p -> objectStorageService.publicUrl(p.getImageKey())));
+
+        return items.stream()
+                .map(item -> ItemResponse.from(item, null, primaryImageUrlByItemId.get(item.getId())))
                 .toList();
     }
 }
