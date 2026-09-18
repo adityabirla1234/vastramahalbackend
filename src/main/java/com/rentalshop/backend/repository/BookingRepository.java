@@ -86,4 +86,20 @@ public interface BookingRepository extends JpaRepository<Booking, Long> {
                          @Param("itemId") Long itemId,
                          @Param("customerId") Long customerId,
                          @Param("dueOnOrBefore") LocalDate dueOnOrBefore);
+
+    /**
+     * Section 3.7 multi-item booking: every row sharing one groupId,
+     * soonest pickup first. Backs GET /api/bookings/group/{groupId} --
+     * the "overall bill" for a multi-item booking session is just the sum
+     * of these on the client, computed on the fly rather than stored
+     * anywhere (there is no separate booking-group entity).
+     */
+    @Query("""
+       select b from Booking b
+       join fetch b.item
+       join fetch b.customer
+       where b.groupId = :groupId
+       order by b.pickupDate asc
+       """)
+    List<Booking> findByGroupIdWithDetails(@Param("groupId") String groupId);
 }

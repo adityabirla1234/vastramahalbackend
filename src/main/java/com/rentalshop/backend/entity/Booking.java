@@ -72,6 +72,21 @@ public class Booking {
     @Column(name = "created_by")
     private Long createdBy;
 
+    /**
+     * Shared across every item submitted together in one New Booking
+     * session (Section 3.7 multi-item redesign) -- a client-generated or
+     * server-assigned UUID, stamped identically onto each item's row by
+     * BookingService.createBookingBatch. Null for a standalone
+     * single-item booking created via the plain POST /api/bookings path.
+     * Deliberately NOT a foreign key to any "booking group" table -- there
+     * is no separate group entity/lifecycle to keep in sync; a group is
+     * simply every Booking row that happens to share this value, and the
+     * "overall bill" is computed on the fly as their sum (see
+     * BookingService.getGroupBookings), never stored anywhere.
+     */
+    @Column(name = "group_id", length = 40)
+    private String groupId;
+
     @Version
     @Column(nullable = false)
     private Long version = 0L;

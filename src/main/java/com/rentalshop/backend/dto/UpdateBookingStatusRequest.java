@@ -1,9 +1,12 @@
 package com.rentalshop.backend.dto;
 
 import com.rentalshop.backend.entity.Booking;
+import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.NotNull;
 import lombok.Getter;
 import lombok.Setter;
+
+import java.math.BigDecimal;
 
 @Getter
 @Setter
@@ -22,4 +25,15 @@ public class UpdateBookingStatusRequest {
      * rather than overwrite. */
     @NotNull
     private Long version;
+
+    /**
+     * Section 3.7 redesign, step 5: the security deposit is collected and
+     * entered here, at PICKED_UP time, not at booking creation. Required by
+     * BookingService.updateStatus whenever targetStatus is PICKED_UP (the
+     * app must prompt for it before allowing that transition); ignored for
+     * every other transition. Folds into Booking.balanceAmount the same way
+     * rentalAmount/advanceAmount already do at creation.
+     */
+    @DecimalMin("0.0")
+    private BigDecimal depositAmount;
 }

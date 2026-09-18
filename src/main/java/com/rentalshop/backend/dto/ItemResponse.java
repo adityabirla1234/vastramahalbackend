@@ -18,7 +18,6 @@ public class ItemResponse {
     private String size;
     private String color;
     private BigDecimal rentalPrice;
-    private BigDecimal deposit;
     private String description;
     private Item.ItemStatus status;
     private Long version;
@@ -66,7 +65,6 @@ public class ItemResponse {
                 .size(i.getSize())
                 .color(i.getColor())
                 .rentalPrice(i.getRentalPrice())
-                .deposit(i.getDeposit())
                 .description(i.getDescription())
                 .status(i.getStatus())
                 .version(i.getVersion())

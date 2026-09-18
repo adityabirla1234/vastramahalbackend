@@ -29,9 +29,10 @@ public class CreateBookingRequest {
     @DecimalMin("0.0")
     private BigDecimal rentalAmount;
 
-    @DecimalMin("0.0")
-    private BigDecimal depositAmount = BigDecimal.ZERO;
-
+    // No depositAmount field by design -- a booking is created with just
+    // rental + advance. Booking.depositAmount defaults to ZERO in the entity
+    // and is only ever set later, at pickup time, via
+    // PATCH /bookings/{id}/status (UpdateBookingStatusRequest.depositAmount).
     @DecimalMin("0.0")
     private BigDecimal advanceAmount = BigDecimal.ZERO;
 
@@ -54,4 +55,14 @@ public class CreateBookingRequest {
      * there's no @NotNull here and the Android app doesn't need to send it.
      */
     private Long createdBy;
+
+    /**
+     * Section 3.7 multi-item booking: when this item is submitted as part
+     * of a batch via POST /api/bookings/batch, BookingService.createBookingBatch
+     * overwrites this with the shared group UUID before creating each item --
+     * a client-supplied value is never trusted directly on a batch call.
+     * Left null for a standalone booking made via this plain
+     * POST /api/bookings path (no group).
+     */
+    private String groupId;
 }

@@ -32,7 +32,6 @@ CREATE TABLE IF NOT EXISTS items (
     size            VARCHAR(30),
     color           VARCHAR(40),
     rental_price    DECIMAL(10,2)       NOT NULL DEFAULT 0,
-    deposit         DECIMAL(10,2)       NOT NULL DEFAULT 0,
     description     TEXT,
     status          VARCHAR(20)         NOT NULL DEFAULT 'ACTIVE', -- ACTIVE|INACTIVE|MAINTENANCE|LOST|DAMAGED
     is_deleted      BOOLEAN             NOT NULL DEFAULT FALSE,    -- soft delete
@@ -81,6 +80,11 @@ CREATE TABLE IF NOT EXISTS bookings (
     notes           TEXT,
     idempotency_key VARCHAR(80),
     created_by      BIGINT,
+    group_id        VARCHAR(40),        -- Section 3.7 multi-item booking: every row created
+                                         -- together in one New Booking session shares this
+                                         -- value. NULL for a standalone single-item booking.
+                                         -- Not a foreign key -- there is no separate booking
+                                         -- group table, a "group" is just every row sharing this.
     version         BIGINT              NOT NULL DEFAULT 0,
     created_at      TIMESTAMP           DEFAULT CURRENT_TIMESTAMP,
     updated_at      TIMESTAMP           DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -94,6 +98,16 @@ CREATE TABLE IF NOT EXISTS bookings (
 
 -- Critical index for the overlap/availability query (Section 10).
 CREATE INDEX idx_booking_item_dates ON bookings (item_id, pickup_date, return_date);
+
+-- Section 3.7 redesign, migrations for an already-deployed DB. Both are
+-- safe to re-run alongside the CREATE TABLE statements above, same
+-- ADD/DROP COLUMN IF [NOT] EXISTS pattern already used for owners.fcm_token.
+ALTER TABLE items DROP COLUMN IF EXISTS deposit;
+ALTER TABLE bookings ADD COLUMN IF NOT EXISTS group_id VARCHAR(40);
+-- Plain CREATE INDEX (no IF NOT EXISTS -- unlike ADD/DROP COLUMN, this
+-- MySQL version doesn't support that clause on CREATE INDEX). Skip/comment
+-- this line out if re-running against a DB that already has the index.
+CREATE INDEX idx_booking_group ON bookings (group_id);
 
 CREATE TABLE IF NOT EXISTS payments (
     id              BIGINT AUTO_INCREMENT PRIMARY KEY,

@@ -38,8 +38,6 @@ public class CreateItemRequest {
     @DecimalMin("0.0")
     private BigDecimal rentalPrice;
 
-    @DecimalMin("0.0")
-    private BigDecimal deposit = BigDecimal.ZERO;
 
     private String description;
 

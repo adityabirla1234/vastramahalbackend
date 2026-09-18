@@ -45,7 +45,6 @@ public class ItemService {
         item.setSize(req.getSize());
         item.setColor(req.getColor());
         item.setRentalPrice(req.getRentalPrice());
-        item.setDeposit(req.getDeposit() == null ? java.math.BigDecimal.ZERO : req.getDeposit());
         item.setDescription(req.getDescription());
         item.setStatus(req.getStatus() == null ? Item.ItemStatus.ACTIVE : req.getStatus());
 
@@ -77,8 +76,7 @@ public class ItemService {
                     item.setSize(req.getSize());
                     item.setColor(req.getColor());
                     item.setRentalPrice(req.getRentalPrice());
-                    item.setDeposit(req.getDeposit() == null ? java.math.BigDecimal.ZERO : req.getDeposit());
-                    item.setDescription(req.getDescription());
+                                item.setDescription(req.getDescription());
                     item.setStatus(req.getStatus());
 
                     Item saved = itemRepository.save(item);

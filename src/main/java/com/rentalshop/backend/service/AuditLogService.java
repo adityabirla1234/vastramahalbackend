@@ -128,7 +128,6 @@ public class AuditLogService {
         m.put("size", item.getSize());
         m.put("color", item.getColor());
         m.put("rentalPrice", item.getRentalPrice());
-        m.put("deposit", item.getDeposit());
         m.put("status", item.getStatus());
         m.put("deleted", item.isDeleted());
         return m;

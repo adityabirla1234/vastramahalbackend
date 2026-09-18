@@ -1,6 +1,8 @@
 package com.rentalshop.backend.controller;
 
+import com.rentalshop.backend.dto.BookingBatchResponse;
 import com.rentalshop.backend.dto.BookingResponse;
+import com.rentalshop.backend.dto.CreateBookingBatchRequest;
 import com.rentalshop.backend.dto.CreateBookingRequest;
 import com.rentalshop.backend.dto.UpdateBookingStatusRequest;
 import com.rentalshop.backend.entity.Booking;
@@ -77,6 +79,40 @@ public class BookingController {
         request.setCreatedBy(CurrentDevice.get().ownerId());
         BookingResponse response = bookingService.createBooking(request);
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
+    }
+
+    /**
+     * Section 3.7 multi-item single-form booking: one New Booking submission
+     * with several item rows. Admin-only, same posture as the single-item
+     * create above -- createdBy is overwritten per-item here for the same
+     * reason (never trust a client-supplied createdBy).
+     *
+     * Returns 201 only if every item succeeded; otherwise 207 Multi-Status,
+     * with the per-item breakdown in the body (BookingBatchResponse.results)
+     * so the app can show exactly which rows need fixing and resubmitting --
+     * one item's conflict never blocks or rolls back the others (Section
+     * 3.7 / 14.9 partial-success rule).
+     */
+    @PostMapping("/batch")
+    @RequireRole(Owner.Role.ADMIN)
+    public ResponseEntity<BookingBatchResponse> createBatch(@Valid @RequestBody CreateBookingBatchRequest request) {
+        Long ownerId = CurrentDevice.get().ownerId();
+        request.getItems().forEach(item -> item.setCreatedBy(ownerId));
+
+        BookingBatchResponse response = bookingService.createBookingBatch(request);
+        HttpStatus status = response.allSucceeded() ? HttpStatus.CREATED : HttpStatus.MULTI_STATUS;
+        return ResponseEntity.status(status).body(response);
+    }
+
+    /**
+     * Every booking sharing one groupId, for the "overall bill" view on a
+     * multi-item booking session -- the app sums these client-side rather
+     * than reading a stored total, since there's no separate booking-group
+     * entity. No @RequireRole -- a read, same posture as the other lookups.
+     */
+    @GetMapping("/group/{groupId}")
+    public ResponseEntity<List<BookingResponse>> findByGroup(@PathVariable String groupId) {
+        return ResponseEntity.ok(bookingService.getGroupBookings(groupId));
     }
 
     /**

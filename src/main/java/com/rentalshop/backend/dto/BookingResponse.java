@@ -27,6 +27,10 @@ public class BookingResponse {
     private Booking.BookingStatus status;
     /** Optimistic-lock value for PATCH /api/bookings/{id}/status -- see UpdateBookingStatusRequest. */
     private Long version;
+    /** Section 3.7 multi-item booking -- null for a standalone booking.
+     * See Booking.groupId's Javadoc; GET /api/bookings/group/{groupId}
+     * fetches every row sharing this value for the "overall bill" view. */
+    private String groupId;
 
     public static BookingResponse from(Booking b) {
         return BookingResponse.builder()
@@ -46,6 +50,7 @@ public class BookingResponse {
                 .balanceAmount(b.getBalanceAmount())
                 .status(b.getStatus())
                 .version(b.getVersion())
+                .groupId(b.getGroupId())
                 .build();
     }
 }

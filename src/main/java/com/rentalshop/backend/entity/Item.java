@@ -42,9 +42,6 @@ public class Item {
     @Column(name = "rental_price", nullable = false, precision = 10, scale = 2)
     private BigDecimal rentalPrice = BigDecimal.ZERO;
 
-    @Column(precision = 10, scale = 2)
-    private BigDecimal deposit = BigDecimal.ZERO;
-
     @Column(columnDefinition = "TEXT")
     private String description;
 

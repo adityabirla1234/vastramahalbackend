@@ -1,6 +1,9 @@
 package com.rentalshop.backend.service;
 
+import com.rentalshop.backend.dto.BookingBatchResponse;
+import com.rentalshop.backend.dto.BookingItemResult;
 import com.rentalshop.backend.dto.BookingResponse;
+import com.rentalshop.backend.dto.CreateBookingBatchRequest;
 import com.rentalshop.backend.dto.CreateBookingRequest;
 import com.rentalshop.backend.dto.UpdateBookingStatusRequest;
 import com.rentalshop.backend.entity.Booking;
@@ -11,6 +14,8 @@ import com.rentalshop.backend.repository.BookingRepository;
 import com.rentalshop.backend.repository.CustomerRepository;
 import com.rentalshop.backend.repository.ItemRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
@@ -18,6 +23,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -50,6 +56,23 @@ public class BookingService {
     private final ItemRepository itemRepository;
     private final CustomerRepository customerRepository;
     private final AuditLogService auditLogService;
+
+    /**
+     * Self-injected proxy (standard Spring self-injection pattern, @Lazy to
+     * break the circular dependency). createBookingBatch below is NOT
+     * @Transactional itself -- it calls self.createBooking(...) once per
+     * item, and because that call goes back through the Spring proxy, each
+     * call opens and commits/rolls back its OWN transaction. That's what
+     * makes one item's conflict independent of the others: item #4 failing
+     * rolls back only item #4's transaction, never touching #1-3's already-
+     * committed rows (Section 3.7 / 14.9 partial-success rule). Calling
+     * this.createBooking(...) directly instead would silently skip
+     * @Transactional entirely (no self-proxying in plain Java), which is
+     * the mistake this field exists to avoid.
+     */
+    @Autowired
+    @Lazy
+    private BookingService self;
 
     private static final DateTimeFormatter BOOKING_NUMBER_DATE_FMT =
             DateTimeFormatter.ofPattern("yyyyMMdd");
@@ -114,13 +137,16 @@ public class BookingService {
         booking.setEventDate(req.getEventDate());
         booking.setReturnDate(req.getReturnDate());
         booking.setRentalAmount(req.getRentalAmount());
-        booking.setDepositAmount(req.getDepositAmount());
+        // depositAmount deliberately left unset here -- it defaults to ZERO
+        // on the entity and is only ever set later, at pickup time (see
+        // updateStatus() below).
         booking.setAdvanceAmount(req.getAdvanceAmount());
         booking.setBalanceAmount(computeBalance(req));
         booking.setStatus(Booking.BookingStatus.CONFIRMED);
         booking.setNotes(req.getNotes());
         booking.setIdempotencyKey(req.getIdempotencyKey());
         booking.setCreatedBy(req.getCreatedBy());
+        booking.setGroupId(req.getGroupId());
 
         Booking saved = bookingRepository.save(booking);
 
@@ -133,6 +159,68 @@ public class BookingService {
         auditLogService.recordBookingCreated(saved);
 
         return BookingResponse.from(saved);
+    }
+
+    /**
+     * Section 3.7 multi-item single-form booking: creates every item in
+     * [req.getItems()] tagged with the SAME groupId. Deliberately NOT
+     * @Transactional itself -- each item is created via self.createBooking(...)
+     * (see the `self` field's Javadoc above), so a conflict or validation
+     * failure on one item can never roll back items that already committed.
+     * This is what lets staff fix just the failing row's dates and resubmit
+     * it alone (via the plain POST /api/bookings, same groupId) instead of
+     * losing the whole group.
+     *
+     * groupId resolution: if the FIRST item in the batch already carries a
+     * non-blank groupId (e.g. the whole batch is being retried wholesale
+     * after a timeout/crash before any response came back), that value is
+     * reused for every item so the retry rejoins the same group rather than
+     * starting a second one. Every already-succeeded item in that retry
+     * short-circuits via its own idempotencyKey inside createBooking, so
+     * nothing is duplicated. Otherwise a fresh UUID is generated here and
+     * stamped onto every item before it's created.
+     */
+    public BookingBatchResponse createBookingBatch(CreateBookingBatchRequest req) {
+        String firstGroupId = req.getItems().isEmpty() ? null : req.getItems().get(0).getGroupId();
+        String groupId = (firstGroupId != null && !firstGroupId.isBlank())
+                ? firstGroupId
+                : UUID.randomUUID().toString();
+
+        List<BookingItemResult> results = new ArrayList<>();
+        for (CreateBookingRequest item : req.getItems()) {
+            item.setGroupId(groupId);
+            try {
+                BookingResponse response = self.createBooking(item);
+                results.add(BookingItemResult.ok(response));
+            } catch (BookingConflictException e) {
+                results.add(BookingItemResult.failed(item.getItemId(), "BOOKING_CONFLICT", e.getMessage()));
+            } catch (IllegalArgumentException e) {
+                results.add(BookingItemResult.failed(item.getItemId(), "BAD_REQUEST", e.getMessage()));
+            } catch (IllegalStateException e) {
+                results.add(BookingItemResult.failed(item.getItemId(), "INVALID_STATE", e.getMessage()));
+            } catch (RuntimeException e) {
+                // Anything unexpected still gets captured as a per-item failure
+                // rather than aborting the rest of the batch (e.g. a transient
+                // DB hiccup on just this one item shouldn't cost the others).
+                results.add(BookingItemResult.failed(item.getItemId(), "UNKNOWN_ERROR", e.getMessage()));
+            }
+        }
+
+        return BookingBatchResponse.builder()
+                .groupId(groupId)
+                .results(results)
+                .build();
+    }
+
+    /**
+     * Section 3.7 multi-item booking: every row sharing one groupId, for
+     * the "overall bill" view. See BookingRepository.findByGroupIdWithDetails.
+     */
+    @Transactional(readOnly = true)
+    public List<BookingResponse> getGroupBookings(String groupId) {
+        return bookingRepository.findByGroupIdWithDetails(groupId).stream()
+                .map(BookingResponse::from)
+                .toList();
     }
 
     /**
@@ -163,6 +251,26 @@ public class BookingService {
                         throw new IllegalStateException(
                                 "Cannot transition booking " + booking.getBookingNumber() +
                                 " from " + previousStatus + " to " + target);
+                    }
+
+                    // Section 3.7 redesign, step 5: the security deposit is
+                    // collected right here, at pickup time -- never at
+                    // creation. The app must prompt for it before calling
+                    // this with targetStatus=PICKED_UP; enforced server-side
+                    // too so a client bug can't silently skip it. It folds
+                    // into balanceAmount the same way rentalAmount/advanceAmount
+                    // already do at creation, replacing the ZERO placeholder
+                    // that's been sitting there since the booking was made.
+                    if (target == Booking.BookingStatus.PICKED_UP) {
+                        if (req.getDepositAmount() == null) {
+                            throw new IllegalArgumentException(
+                                    "depositAmount is required when marking a booking as picked up");
+                        }
+                        BigDecimal previousDeposit = booking.getDepositAmount() == null
+                                ? BigDecimal.ZERO : booking.getDepositAmount();
+                        booking.setDepositAmount(req.getDepositAmount());
+                        booking.setBalanceAmount(
+                                booking.getBalanceAmount().subtract(previousDeposit).add(req.getDepositAmount()));
                     }
 
                     booking.setStatus(target);
@@ -209,9 +317,14 @@ public class BookingService {
                         .toList());
     }
 
+    // Deposit is intentionally excluded here -- at creation time it's always
+    // ZERO (see createBooking above), so including it would be a no-op today,
+    // but leaving it out of the formula entirely (rather than adding a ZERO)
+    // keeps this method honest about what booking creation actually charges.
+    // Once updateStatus() sets a real depositAmount at pickup time, that
+    // value flows into balanceAmount there, not here.
     private BigDecimal computeBalance(CreateBookingRequest req) {
         return req.getRentalAmount()
-                .add(req.getDepositAmount() == null ? BigDecimal.ZERO : req.getDepositAmount())
                 .subtract(req.getAdvanceAmount() == null ? BigDecimal.ZERO : req.getAdvanceAmount());
     }
 
