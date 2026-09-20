@@ -102,4 +102,15 @@ public interface BookingRepository extends JpaRepository<Booking, Long> {
        order by b.pickupDate asc
        """)
     List<Booking> findByGroupIdWithDetails(@Param("groupId") String groupId);
+
+    /**
+     * How many item rows one bill has. Used to tell a real multi-item bill
+     * apart from a one-item booking that merely carries a groupId (New
+     * Booking always submits through the batch endpoint, so every booking
+     * made by the app has one) -- the distinction that decides whether
+     * payments belong on the bill or on the item. A count rather than
+     * reusing findByGroupIdWithDetails: the callers only need the number,
+     * not four joined entity graphs.
+     */
+    long countByGroupId(String groupId);
 }

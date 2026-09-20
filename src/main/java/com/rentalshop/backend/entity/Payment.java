@@ -51,6 +51,22 @@ public class Payment {
     @Column(length = 300)
     private String notes;
 
+    /**
+     * Ties together the rows created by ONE payment taken against a group
+     * booking. A bill with four items that takes a single Rs. 5000 payment
+     * writes up to four rows here (each decrementing its own booking's
+     * balance -- see PaymentService.recordGroupPayment for why the money has
+     * to be split rather than parked on one row), and they all carry the
+     * same value here. That's what lets the app show it back as the one
+     * payment it actually was, and lets a correction remove all of its
+     * pieces together instead of leaving a bill half-unpaid.
+     *
+     * Null for a payment recorded against a standalone booking -- there was
+     * nothing to split, so there is nothing to tie together.
+     */
+    @Column(name = "group_payment_ref", length = 40)
+    private String groupPaymentRef;
+
     @CreationTimestamp
     @Column(name = "created_at", updatable = false)
     private LocalDateTime createdAt;

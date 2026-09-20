@@ -8,6 +8,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.time.LocalDate;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -83,4 +84,39 @@ public interface ItemRepository extends JpaRepository<Item, Long> {
     List<Item> search(@Param("category") String category,
                        @Param("status") Item.ItemStatus status,
                        @Param("includeDeleted") boolean includeDeleted);
+
+    /**
+     * Backs the New Booking form's "Add accessory" picker: every bookable
+     * item filed under one accessory bucket (pant / jewellery / dupatta).
+     *
+     * [matchTerms] is the bucket's set of accepted lower-case spellings --
+     * see AccessoryCategory.matchTerms() for why a bucket maps to several.
+     * An item qualifies on EITHER its category or its sub-category, because
+     * shops file accessories both ways ("Jewellery" as the category, or
+     * "Bridal / Jewellery" as category / sub-category) and forcing one
+     * convention would silently hide half the inventory from the picker.
+     * Both sides are lower-cased and trimmed so casing and stray spaces in
+     * hand-typed inventory rows don't decide whether an item shows up.
+     *
+     * Deliberately no date-range availability filter, unlike
+     * findAvailableInRange above: attaching an accessory to a booking does
+     * not book it (see BookingAccessory's class doc), so there is no
+     * occupied/free state to filter on. Retired (soft-deleted) and
+     * non-ACTIVE items are still excluded -- a damaged or lost accessory
+     * shouldn't be offered.
+     *
+     * No name/code filter here either: the picker loads the bucket once and
+     * filters locally as staff type, so searching costs no round trip --
+     * same pattern the "Add another item" search on the same form already
+     * uses.
+     */
+    @Query("""
+           select i from Item i
+           where i.deleted = false
+             and i.status = 'ACTIVE'
+             and (lower(trim(i.category)) in :matchTerms
+                  or lower(trim(i.subCategory)) in :matchTerms)
+           order by i.name
+           """)
+    List<Item> findAccessoryCandidates(@Param("matchTerms") Collection<String> matchTerms);
 }

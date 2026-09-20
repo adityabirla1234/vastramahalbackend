@@ -1,6 +1,7 @@
 package com.rentalshop.backend.dto;
 
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Pattern;
 import lombok.Getter;
 import lombok.Setter;
 
@@ -20,7 +21,9 @@ public class UpdateCustomerRequest {
     @NotBlank
     private String name;
 
+    /** Same ten-digits-only rule as CreateCustomerRequest.phone -- see its Javadoc. */
     @NotBlank
+    @Pattern(regexp = "\\d{10}", message = "Phone number must be exactly 10 digits")
     private String phone;
 
     private String address;

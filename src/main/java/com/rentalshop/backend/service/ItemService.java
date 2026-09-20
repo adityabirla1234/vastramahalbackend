@@ -3,6 +3,7 @@ package com.rentalshop.backend.service;
 import com.rentalshop.backend.dto.CreateItemRequest;
 import com.rentalshop.backend.dto.ItemResponse;
 import com.rentalshop.backend.dto.UpdateItemRequest;
+import com.rentalshop.backend.entity.AccessoryCategory;
 import com.rentalshop.backend.entity.Item;
 import com.rentalshop.backend.repository.ItemImageRepository;
 import com.rentalshop.backend.repository.ItemRepository;
@@ -105,15 +106,39 @@ public class ItemService {
 
     @Transactional(readOnly = true)
     public List<ItemResponse> listItems(String category, Item.ItemStatus status, boolean includeDeleted) {
-        List<Item> items = itemRepository.search(category, status, includeDeleted);
+        return toListResponses(itemRepository.search(category, status, includeDeleted));
+    }
+
+    /**
+     * Backs the New Booking form's "Add accessory" picker: every bookable
+     * item in one accessory bucket, so staff can tick the pant / dupatta /
+     * jewellery going out with a dress.
+     *
+     * Returns the same shape as the inventory list (thumbnail included, no
+     * per-row gallery) on purpose -- the picker renders rows that look and
+     * behave exactly like the inventory rows staff already recognise, and
+     * gets the bulk primary-image resolution for free.
+     *
+     * Empty is a perfectly normal result: a shop that hasn't entered any
+     * dupattas yet gets an empty dupatta bucket, not an error. The app
+     * shows "nothing in this category yet" rather than a failure.
+     */
+    @Transactional(readOnly = true)
+    public List<ItemResponse> listAccessoryItems(AccessoryCategory category) {
+        return toListResponses(itemRepository.findAccessoryCandidates(category.matchTerms()));
+    }
+
+    /**
+     * Shared by both list endpoints above. One bulk query for the whole
+     * page's primary-image keys, resolved to public URLs, rather than a
+     * per-row lookup -- keeps the "no per-row image cost" guarantee (see
+     * ItemResponse's Javadoc) while still giving each row a thumbnail.
+     */
+    private List<ItemResponse> toListResponses(List<Item> items) {
         if (items.isEmpty()) {
             return List.of();
         }
 
-        // One bulk query for the whole page's primary-image keys, resolved to
-        // public URLs, rather than a per-row lookup -- keeps this endpoint's
-        // "no per-row image cost" guarantee (see ItemResponse's Javadoc) while
-        // still giving the Inventory grid a thumbnail to show.
         List<Long> ids = items.stream().map(Item::getId).toList();
         Map<Long, String> primaryImageUrlByItemId = itemImageRepository.findPrimaryImageKeysForItems(ids).stream()
                 .collect(Collectors.toMap(

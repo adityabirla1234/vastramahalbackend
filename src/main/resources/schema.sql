@@ -74,10 +74,15 @@ CREATE TABLE IF NOT EXISTS bookings (
     return_date     DATE                NOT NULL,
     rental_amount   DECIMAL(10,2)       NOT NULL DEFAULT 0,
     deposit_amount  DECIMAL(10,2)       NOT NULL DEFAULT 0,
+    deposit_payment_method VARCHAR(40), -- Cash|UPI|Card; how the security deposit was paid, entered at pickup.
+                                         -- NULL = no deposit / older booking.
     advance_amount  DECIMAL(10,2)       NOT NULL DEFAULT 0,
+    advance_payment_method VARCHAR(40), -- Cash|UPI|Card; how the advance was paid. NULL = no advance / older booking.
     balance_amount  DECIMAL(10,2)       NOT NULL DEFAULT 0,
     status          VARCHAR(20)         NOT NULL DEFAULT 'PENDING', -- PENDING|CONFIRMED|PICKED_UP|RETURNED|CANCELLED
     notes           TEXT,
+    fitting_work    TEXT,               -- Alteration instructions for this item row. Only ever set AFTER the
+                                         -- bill exists (Booking History "Edit" flow), never at creation. NULL = none.
     idempotency_key VARCHAR(80),
     created_by      BIGINT,
     group_id        VARCHAR(40),        -- Section 3.7 multi-item booking: every row created
@@ -85,6 +90,16 @@ CREATE TABLE IF NOT EXISTS bookings (
                                          -- value. NULL for a standalone single-item booking.
                                          -- Not a foreign key -- there is no separate booking
                                          -- group table, a "group" is just every row sharing this.
+    bill_number     VARCHAR(40),        -- The shop's own "Bill No", typed in on the New Booking
+                                         -- form. Same value on every row of a group booking.
+                                         -- Optional, and NOT unique (human-entered reference).
+    deposit_return_status VARCHAR(20),  -- RETURNED|NOT_RETURNED|DAMAGED, set only when this
+                                         -- booking (or every row of its group) is finally marked
+                                         -- RETURNED. Informational only -- never folded into
+                                         -- rental_amount/balance_amount.
+    deposit_return_reason  VARCHAR(500), -- Why the deposit was NOT handed back (required when staff answer "No" at
+                                         -- return time). NULL otherwise.
+    settlement_status      VARCHAR(10), -- SETTLED|DUE, set alongside deposit_return_status above.
     version         BIGINT              NOT NULL DEFAULT 0,
     created_at      TIMESTAMP           DEFAULT CURRENT_TIMESTAMP,
     updated_at      TIMESTAMP           DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -93,7 +108,9 @@ CREATE TABLE IF NOT EXISTS bookings (
     CONSTRAINT fk_booking_item FOREIGN KEY (item_id) REFERENCES items(id),
     CONSTRAINT fk_booking_customer FOREIGN KEY (customer_id) REFERENCES customers(id),
     CONSTRAINT chk_booking_status CHECK (status IN ('PENDING','CONFIRMED','PICKED_UP','RETURNED','CANCELLED')),
-    CONSTRAINT chk_booking_dates CHECK (return_date >= pickup_date)
+    CONSTRAINT chk_booking_dates CHECK (return_date >= pickup_date),
+    CONSTRAINT chk_booking_deposit_return_status CHECK (deposit_return_status IN ('RETURNED','NOT_RETURNED','DAMAGED')),
+    CONSTRAINT chk_booking_settlement_status CHECK (settlement_status IN ('SETTLED','DUE'))
 );
 
 -- Critical index for the overlap/availability query (Section 10).
@@ -109,6 +126,54 @@ ALTER TABLE bookings ADD COLUMN IF NOT EXISTS group_id VARCHAR(40);
 -- this line out if re-running against a DB that already has the index.
 CREATE INDEX idx_booking_group ON bookings (group_id);
 
+-- "Bill No" on the New Booking form: migration for an already-deployed DB
+-- (same ADD COLUMN IF NOT EXISTS pattern as above). Needed when
+-- spring.jpa.hibernate.ddl-auto is `validate` (production posture) --
+-- with `update` Hibernate adds the column itself on next startup.
+ALTER TABLE bookings ADD COLUMN IF NOT EXISTS bill_number VARCHAR(40);
+
+-- "Fitting work" on each item of a bill in Booking History: migration for an
+-- already-deployed DB (same ADD COLUMN IF NOT EXISTS pattern as above; with
+-- ddl-auto=update Hibernate adds the column itself on next startup).
+ALTER TABLE bookings ADD COLUMN IF NOT EXISTS fitting_work TEXT;
+
+-- Single "Mark picked up / returned" flow: the security deposit's payment
+-- method (Cash/UPI/Card) and the reason given when it is NOT handed back.
+-- Migration for an already-deployed DB, same ADD COLUMN IF NOT EXISTS pattern
+-- as above; with ddl-auto=update Hibernate adds both columns itself on next
+-- startup. Existing rows simply have NULL in both.
+ALTER TABLE bookings ADD COLUMN IF NOT EXISTS deposit_payment_method VARCHAR(40);
+ALTER TABLE bookings ADD COLUMN IF NOT EXISTS deposit_return_reason VARCHAR(500);
+
+-- "Add accessory" on the New Booking form: the pant / jewellery / dupatta
+-- that goes out alongside ONE booked item. Per booking row, not per bill --
+-- a bill with four dresses has four independent accessory lists.
+--
+-- item_code/item_name/category are SNAPSHOTS copied off the inventory item
+-- at booking time, not a live join (see BookingAccessory's class doc): an
+-- old bill has to keep rendering what actually went out that day even after
+-- the item is renamed, re-categorised or retired. item_id is kept purely so
+-- the app can deep-link to the live product when it still exists, which is
+-- also why its FK has no ON DELETE clause -- items are only ever
+-- soft-deleted (ItemService.deleteItem), so the row never disappears.
+--
+-- The unique key is what makes the "same accessory ticked twice" case a
+-- no-op rather than a duplicate bill line; BookingService.attachAccessories
+-- already collapses them before they get here, this is the backstop.
+CREATE TABLE IF NOT EXISTS booking_accessories (
+    id              BIGINT AUTO_INCREMENT PRIMARY KEY,
+    booking_id      BIGINT              NOT NULL,
+    item_id         BIGINT              NOT NULL,
+    item_code       VARCHAR(40)         NOT NULL,
+    item_name       VARCHAR(150)        NOT NULL,
+    category        VARCHAR(20)         NOT NULL,   -- PANT | JEWELLERY | DUPATTA
+    created_at      TIMESTAMP           DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_booking_accessory (booking_id, item_id),
+    CONSTRAINT fk_booking_accessory_booking FOREIGN KEY (booking_id) REFERENCES bookings(id) ON DELETE CASCADE,
+    CONSTRAINT fk_booking_accessory_item FOREIGN KEY (item_id) REFERENCES items(id),
+    CONSTRAINT chk_booking_accessory_category CHECK (category IN ('PANT','JEWELLERY','DUPATTA'))
+);
+
 CREATE TABLE IF NOT EXISTS payments (
     id              BIGINT AUTO_INCREMENT PRIMARY KEY,
     booking_id      BIGINT              NOT NULL,
@@ -116,8 +181,15 @@ CREATE TABLE IF NOT EXISTS payments (
     payment_date    DATE                NOT NULL,
     method          VARCHAR(40),
     notes           VARCHAR(300),
+    -- Shared by every row written by ONE payment taken against a group
+    -- booking; NULL for a payment against a standalone booking. Not a
+    -- foreign key -- there is no group-payment table, exactly as there is
+    -- no booking-group table (see bookings.group_id). Indexed because
+    -- undoing a bill-level payment looks its rows up by this value.
+    group_payment_ref VARCHAR(40),
     created_at      TIMESTAMP           DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT fk_payment_booking FOREIGN KEY (booking_id) REFERENCES bookings(id) ON DELETE CASCADE
+    CONSTRAINT fk_payment_booking FOREIGN KEY (booking_id) REFERENCES bookings(id) ON DELETE CASCADE,
+    KEY idx_payment_group_ref (group_payment_ref)
 );
 
 CREATE TABLE IF NOT EXISTS audit_logs (

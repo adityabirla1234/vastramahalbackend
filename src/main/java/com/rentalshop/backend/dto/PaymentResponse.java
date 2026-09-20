@@ -26,6 +26,15 @@ public class PaymentResponse {
      */
     private BigDecimal bookingBalanceAfter;
 
+    /**
+     * Set when this row is one slice of a bill-level payment -- see
+     * Payment.groupPaymentRef. The app uses it to collapse the slices back
+     * into the single payment staff entered, and to show on a per-item
+     * Booking Detail that a payment came from the bill rather than from
+     * that item. Null for an ordinary single-booking payment.
+     */
+    private String groupPaymentRef;
+
     public static PaymentResponse from(Payment p) {
         return PaymentResponse.builder()
                 .id(p.getId())
@@ -36,6 +45,7 @@ public class PaymentResponse {
                 .notes(p.getNotes())
                 .createdAt(p.getCreatedAt())
                 .bookingBalanceAfter(p.getBooking().getBalanceAmount())
+                .groupPaymentRef(p.getGroupPaymentRef())
                 .build();
     }
 }

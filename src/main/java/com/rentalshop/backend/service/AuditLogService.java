@@ -1,6 +1,7 @@
 package com.rentalshop.backend.service;
 
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 import org.slf4j.Logger;
@@ -65,6 +66,39 @@ public class AuditLogService {
         Map<String, Object> before = new LinkedHashMap<>();
         before.put("status", previousStatus);
         write("BOOKING_STATUS_CHANGED", "BOOKING", booking.getId(), before, snapshotBooking(booking));
+    }
+
+    /**
+     * Booking History "Edit bill" action -- notes/accessories/rental-advance
+     * corrections and item exchanges on an existing row. Same before-snapshot
+     * contract as {@link #recordItemUpdated}: the caller (BookingService.
+     * updateBookingItem) must capture {@link #snapshotBooking} BEFORE
+     * applying the request's changes, since this method only ever sees the
+     * already-mutated entity.
+     */
+    public void recordBookingItemUpdated(Map<String, Object> before, Booking after) {
+        write("BOOKING_ITEM_UPDATED", "BOOKING", after.getId(), before, snapshotBooking(after));
+    }
+
+    /**
+     * Booking History "Remove item" action -- the row is never hard-deleted
+     * (see BookingService.removeBookingItem), just cancelled with its amounts
+     * zeroed, so this reads more like an update than a deletion: before is
+     * the bill as it stood with the item still on it, after is the same row
+     * now cancelled and worth nothing towards the bill.
+     */
+    public void recordBookingItemRemoved(Map<String, Object> before, Booking after) {
+        write("BOOKING_ITEM_REMOVED", "BOOKING", after.getId(), before, snapshotBooking(after));
+    }
+
+    /**
+     * Amount Due Bills (Customers section): staff closing out a bill that
+     * was left DUE at final return. See BookingService.settleBill.
+     */
+    public void recordBillSettled(Booking booking) {
+        Map<String, Object> before = new LinkedHashMap<>();
+        before.put("settlementStatus", Booking.SettlementStatus.DUE);
+        write("BILL_SETTLED", "BOOKING", booking.getId(), before, snapshotBooking(booking));
     }
 
     public void recordItemCreated(Item item) {
@@ -144,10 +178,11 @@ public class AuditLogService {
         return m;
     }
 
-    private Map<String, Object> snapshotBooking(Booking booking) {
+    Map<String, Object> snapshotBooking(Booking booking) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("id", booking.getId());
         m.put("bookingNumber", booking.getBookingNumber());
+        m.put("billNumber", booking.getBillNumber());
         m.put("itemId", booking.getItem().getId());
         m.put("customerId", booking.getCustomer().getId());
         m.put("pickupDate", booking.getPickupDate());
@@ -155,9 +190,25 @@ public class AuditLogService {
         m.put("returnDate", booking.getReturnDate());
         m.put("rentalAmount", booking.getRentalAmount());
         m.put("depositAmount", booking.getDepositAmount());
+        m.put("depositPaymentMethod", booking.getDepositPaymentMethod());
+        m.put("depositReturnStatus", booking.getDepositReturnStatus());
+        m.put("depositReturnReason", booking.getDepositReturnReason());
+        m.put("settlementStatus", booking.getSettlementStatus());
         m.put("advanceAmount", booking.getAdvanceAmount());
         m.put("balanceAmount", booking.getBalanceAmount());
         m.put("status", booking.getStatus());
+        m.put("notes", booking.getNotes());
+        m.put("fittingWork", booking.getFittingWork());
+        // Part of what staff actually recorded at the counter, so it
+        // belongs in the audit row and in the Layer-3 off-database trail
+        // alongside everything else -- a reconstruction from that trail
+        // that silently lost the accessory list would be an incomplete
+        // bill. Flattened to "CODE (CATEGORY)" strings rather than nested
+        // objects to keep the JSON column readable at a glance; the
+        // authoritative copy lives in booking_accessories.
+        m.put("accessories", booking.getAccessories() == null ? List.of() : booking.getAccessories().stream()
+                .map(a -> a.getItemCode() + " (" + a.getCategory() + ")")
+                .toList());
         return m;
     }
 
