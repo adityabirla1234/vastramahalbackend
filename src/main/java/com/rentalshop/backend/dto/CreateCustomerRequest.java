@@ -1,6 +1,7 @@
 package com.rentalshop.backend.dto;
 
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
 import jakarta.validation.constraints.Pattern;
 import lombok.Getter;
 import lombok.Setter;
@@ -31,4 +32,13 @@ public class CreateCustomerRequest {
     private String address;
 
     private String notes;
+
+    /**
+     * Client-generated key, stable across retries of the SAME create (the app
+     * queues creates while offline and replays them). A repeat with a key that
+     * already exists returns the record the first attempt made instead of
+     * making a second one. Optional: older app builds don't send it.
+     */
+    @Size(max = 80)
+    private String idempotencyKey;
 }

@@ -17,10 +17,12 @@ import com.rentalshop.backend.entity.Item;
 import com.rentalshop.backend.exception.BookingConflictException;
 import com.rentalshop.backend.repository.BookingRepository;
 import com.rentalshop.backend.repository.CustomerRepository;
+import com.rentalshop.backend.repository.PaymentRepository;
 import com.rentalshop.backend.repository.ItemRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
@@ -63,6 +65,8 @@ public class BookingService {
     private final ItemRepository itemRepository;
     private final CustomerRepository customerRepository;
     private final AuditLogService auditLogService;
+    private final PaymentRepository paymentRepository;
+    private final PaymentService paymentService;
 
     /**
      * Self-injected proxy (standard Spring self-injection pattern, @Lazy to
@@ -108,6 +112,7 @@ public class BookingService {
         if (req.getReturnDate().isBefore(req.getPickupDate())) {
             throw new IllegalArgumentException("returnDate cannot be before pickupDate");
         }
+        requireAdvanceWithinRental(req.getAdvanceAmount(), req.getRentalAmount());
 
         // --- Acquire the row lock on the item BEFORE checking for overlaps.
         // Any other transaction trying to book (or lock) this same item will
@@ -178,6 +183,23 @@ public class BookingService {
     }
 
     /**
+     * A retried batch (the app resends after a lost response) carries the same
+     * per-item idempotency keys but no groupId. If any of those rows were already
+     * committed, reuse THEIR groupId; minting a fresh one would make the response
+     * point at a group that has no rows and split a partially-saved bill in two.
+     */
+    private Optional<String> existingGroupIdForRetry(CreateBookingBatchRequest req) {
+        return req.getItems().stream()
+                .map(CreateBookingRequest::getIdempotencyKey)
+                .filter(k -> k != null && !k.isBlank())
+                .map(bookingRepository::findByIdempotencyKey)
+                .flatMap(Optional::stream)
+                .map(Booking::getGroupId)
+                .filter(g -> g != null && !g.isBlank())
+                .findFirst();
+    }
+
+    /**
      * Section 3.7 multi-item single-form booking: creates every item in
      * [req.getItems()] tagged with the SAME groupId. Deliberately NOT
      * @Transactional itself -- each item is created via self.createBooking(...)
@@ -200,7 +222,7 @@ public class BookingService {
         String firstGroupId = req.getItems().isEmpty() ? null : req.getItems().get(0).getGroupId();
         String groupId = (firstGroupId != null && !firstGroupId.isBlank())
                 ? firstGroupId
-                : UUID.randomUUID().toString();
+                : existingGroupIdForRetry(req).orElseGet(() -> UUID.randomUUID().toString());
 
         // One bill, one Bill No: take the first non-blank value any item
         // carries and stamp it onto every item, same "never trust per-row
@@ -271,7 +293,7 @@ public class BookingService {
     public Optional<BookingResponse> updateStatus(Long id, UpdateBookingStatusRequest req) {
         return bookingRepository.findById(id)
                 .map(booking -> {
-                    booking.setVersion(req.getVersion());
+                    assertVersion(booking, req.getVersion());
 
                     Booking.BookingStatus previousStatus = booking.getStatus();
                     Booking.BookingStatus target = req.getTargetStatus();
@@ -335,7 +357,9 @@ public class BookingService {
                                         "the last item of a bill");
                             }
 
+                            List<Booking> closedRows = new ArrayList<>();
                             applySettlement(booking, req);
+                            closedRows.add(booking);
                             for (Booking sibling : groupSiblings) {
                                 // Only RETURNED siblings actually had a deposit
                                 // collected / a balance worth settling -- a
@@ -345,7 +369,11 @@ public class BookingService {
                                 if (sibling.getStatus() == Booking.BookingStatus.RETURNED) {
                                     applySettlement(sibling, req);
                                     bookingRepository.save(sibling);
+                                    closedRows.add(sibling);
                                 }
+                            }
+                            if (req.getSettlementStatus() == Booking.SettlementStatus.SETTLED) {
+                                paymentService.recordSettlement(closedRows);
                             }
                         }
                     }
@@ -389,24 +417,31 @@ public class BookingService {
                         "Booking " + booking.getBookingNumber() + " is not pending settlement");
             }
 
-            booking.setVersion(version);
-            booking.setSettlementStatus(Booking.SettlementStatus.SETTLED);
-            booking.setBalanceAmount(BigDecimal.ZERO);
+            assertVersion(booking, version);
+
+            List<Booking> dueSiblings = booking.getGroupId() == null
+                    ? List.of()
+                    : bookingRepository.findByGroupIdWithDetails(booking.getGroupId()).stream()
+                            .filter(sibling -> !sibling.getId().equals(booking.getId())
+                                    && sibling.getStatus() == Booking.BookingStatus.RETURNED
+                                    && sibling.getSettlementStatus() == Booking.SettlementStatus.DUE)
+                            .toList();
+
+            List<Booking> settledRows = new ArrayList<>();
+            settledRows.add(booking);
+            settledRows.addAll(dueSiblings);
+            for (Booking row : settledRows) {
+                row.setSettlementStatus(Booking.SettlementStatus.SETTLED);
+            }
+            // Writes down the money that closes each balance (a payment per row that
+            // still owed something) instead of just zeroing it.
+            paymentService.recordSettlement(settledRows);
+
             Booking saved = bookingRepository.save(booking);
             auditLogService.recordBillSettled(saved);
-
-            if (booking.getGroupId() != null) {
-                List<Booking> dueSiblings = bookingRepository.findByGroupIdWithDetails(booking.getGroupId()).stream()
-                        .filter(sibling -> !sibling.getId().equals(booking.getId())
-                                && sibling.getStatus() == Booking.BookingStatus.RETURNED
-                                && sibling.getSettlementStatus() == Booking.SettlementStatus.DUE)
-                        .toList();
-                for (Booking sibling : dueSiblings) {
-                    sibling.setSettlementStatus(Booking.SettlementStatus.SETTLED);
-                    sibling.setBalanceAmount(BigDecimal.ZERO);
-                    bookingRepository.save(sibling);
-                    auditLogService.recordBillSettled(sibling);
-                }
+            for (Booking sibling : dueSiblings) {
+                bookingRepository.save(sibling);
+                auditLogService.recordBillSettled(sibling);
             }
 
             return BookingResponse.from(saved);
@@ -428,17 +463,16 @@ public class BookingService {
 
     /**
      * Records the deposit-return / settlement decision on one booking row.
-     * SETTLED clears whatever balance is left on that row to zero (the bill
-     * is closed full-and-final); DUE leaves balanceAmount exactly as it
-     * stood. Never touches depositAmount or rentalAmount -- the deposit was
-     * never part of the bill, so returning it doesn't change the bill either.
+     * It only sets the two status fields; when the decision is SETTLED the
+     * caller then passes every affected row to
+     * PaymentService.recordSettlement, which zeroes what is left AND records the
+     * payment that closes it. DUE leaves balanceAmount exactly as it stood.
+     * Never touches depositAmount or rentalAmount -- the deposit was never part
+     * of the bill, so returning it doesn't change the bill either.
      */
     private void applySettlement(Booking booking, UpdateBookingStatusRequest req) {
         booking.setDepositReturnStatus(req.getDepositReturnStatus());
         booking.setSettlementStatus(req.getSettlementStatus());
-        if (req.getSettlementStatus() == Booking.SettlementStatus.SETTLED) {
-            booking.setBalanceAmount(BigDecimal.ZERO);
-        }
     }
 
     /**
@@ -475,7 +509,12 @@ public class BookingService {
                         "Booking " + booking.getBookingNumber() + " is closed and can no longer be edited");
             }
 
-            booking.setVersion(req.getVersion());
+            assertVersion(booking, req.getVersion());
+
+            // Read before any field is mutated: a query after mutation would auto-flush
+            // a half-edited row and bump its version twice.
+            BigDecimal paidSum = paymentRepository.sumAmountByBookingId(booking.getId());
+            BigDecimal alreadyPaid = paidSum == null ? BigDecimal.ZERO : paidSum;
 
             // Captured BEFORE any of the request's changes are applied --
             // see AuditLogService.recordBookingItemUpdated's Javadoc.
@@ -512,8 +551,20 @@ public class BookingService {
                 attachAccessories(booking, req.getAccessories());
             }
 
-            booking.setBalanceAmount(booking.getRentalAmount().subtract(
-                    booking.getAdvanceAmount() == null ? BigDecimal.ZERO : booking.getAdvanceAmount()));
+            if (req.getRentalAmount() != null || req.getAdvanceAmount() != null) {
+                // Only when the amounts are actually being changed, so an unrelated
+                // edit (fitting work, notes) is never blocked by old data.
+                requireAdvanceWithinRental(booking.getAdvanceAmount(), booking.getRentalAmount());
+            }
+            BigDecimal newBalance = booking.getRentalAmount()
+                    .subtract(booking.getAdvanceAmount() == null ? BigDecimal.ZERO : booking.getAdvanceAmount())
+                    .subtract(alreadyPaid);
+            if (newBalance.signum() < 0) {
+                throw new IllegalArgumentException(
+                        "Payments already recorded (" + alreadyPaid + ") exceed the new bill amount for booking "
+                                + booking.getBookingNumber());
+            }
+            booking.setBalanceAmount(newBalance);
 
             Booking saved = bookingRepository.save(booking);
             auditLogService.recordBookingItemUpdated(before, saved);
@@ -594,7 +645,7 @@ public class BookingService {
                         "current status (" + booking.getStatus() + ")");
             }
 
-            booking.setVersion(version);
+            assertVersion(booking, version);
 
             java.util.Map<String, Object> before = auditLogService.snapshotBooking(booking);
 
@@ -802,6 +853,27 @@ public class BookingService {
         }
         String trimmed = raw.trim();
         return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    /** The advance is money already taken against the rental, so it can never be more than the rental. */
+    private static void requireAdvanceWithinRental(BigDecimal advance, BigDecimal rental) {
+        if (advance != null && rental != null && advance.compareTo(rental) > 0) {
+            throw new IllegalArgumentException(
+                    "advanceAmount (" + advance + ") cannot be more than rentalAmount (" + rental + ")");
+        }
+    }
+
+    /**
+     * Hibernate takes the UPDATE's "WHERE version = ?" value from the version it
+     * LOADED, not from the entity field, so assigning the client's version to a
+     * managed entity (booking.setVersion(...)) never produces a stale-write
+     * failure. Compare explicitly and raise the exception GlobalExceptionHandler
+     * already maps to 409 STALE_WRITE.
+     */
+    private static void assertVersion(Booking booking, Long expected) {
+        if (expected == null || !expected.equals(booking.getVersion())) {
+            throw new ObjectOptimisticLockingFailureException(Booking.class, booking.getId());
+        }
     }
 
     private String generateBookingNumber(Item item) {

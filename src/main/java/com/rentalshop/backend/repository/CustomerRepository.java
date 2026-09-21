@@ -6,8 +6,11 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.util.List;
+import java.util.Optional;
 
 public interface CustomerRepository extends JpaRepository<Customer, Long> {
+
+    Optional<Customer> findByIdempotencyKey(String idempotencyKey);
     List<Customer> findByDeletedFalseAndPhoneContaining(String phoneFragment);
     List<Customer> findByDeletedFalseAndNameContainingIgnoreCase(String nameFragment);
 

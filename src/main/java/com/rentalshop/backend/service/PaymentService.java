@@ -8,11 +8,13 @@ import com.rentalshop.backend.entity.Payment;
 import com.rentalshop.backend.repository.BookingRepository;
 import com.rentalshop.backend.repository.PaymentRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -39,6 +41,13 @@ public class PaymentService {
     private final PaymentRepository paymentRepository;
     private final BookingRepository bookingRepository;
     private final AuditLogService auditLogService;
+
+    /** Same zone the reminders use, so "today" on a settlement matches the shop's calendar, not UTC. */
+    @Value("${app.reminders.zone:Asia/Kolkata}")
+    private String shopZone;
+
+    /** Note on the payment rows written when a bill is settled full-and-final. */
+    public static final String SETTLEMENT_PAYMENT_NOTE = "Balance settled";
 
     /**
      * Records a payment and decrements the booking's outstanding balance by
@@ -222,6 +231,46 @@ public class PaymentService {
         }
     }
 
+    /**
+     * Closes out the balances on [rows] (a bill being settled full and final) AND
+     * writes down the money that closes them.
+     *
+     * "Settled" means the customer paid what was left, so each row that still
+     * owed something gets a payment for exactly that amount. Before this, the
+     * balance was simply set to zero, which left the payment history short of
+     * the money actually collected and made the books disagree with the till.
+     * Rows already at zero are untouched; a row with a negative balance (bad
+     * historical data) is just zeroed -- there is no money to record.
+     *
+     * When more than one row is paid off in the same call they share one
+     * groupPaymentRef, so the bill's history shows one settlement line, the same
+     * shape as a bill-level payment. Joins the caller's transaction.
+     */
+    @Transactional
+    public void recordSettlement(List<Booking> rows) {
+        List<Booking> owing = rows.stream().filter(r -> r.getBalanceAmount().signum() > 0).toList();
+        String ref = owing.size() > 1 ? UUID.randomUUID().toString() : null;
+        LocalDate today = LocalDate.now(ZoneId.of(shopZone));
+        for (Booking row : rows) {
+            BigDecimal due = row.getBalanceAmount();
+            if (due.signum() == 0) {
+                continue;
+            }
+            if (due.signum() > 0) {
+                Payment payment = new Payment();
+                payment.setBooking(row);
+                payment.setAmount(due);
+                payment.setPaymentDate(today);
+                payment.setNotes(SETTLEMENT_PAYMENT_NOTE);
+                payment.setGroupPaymentRef(ref);
+                Payment saved = paymentRepository.save(payment);
+                auditLogService.recordPaymentCreated(saved);
+            }
+            row.setBalanceAmount(BigDecimal.ZERO);
+            bookingRepository.save(row);
+        }
+    }
+
     /** Every payment taken against any item of one bill, oldest first -- the group screen's history. */
     @Transactional(readOnly = true)
     public List<PaymentResponse> listGroupPayments(String groupId) {
@@ -249,6 +298,9 @@ public class PaymentService {
             return false;
         }
         for (Payment slice : slices) {
+            requireNotSettled(slice.getBooking());
+        }
+        for (Payment slice : slices) {
             Booking booking = slice.getBooking();
             booking.setBalanceAmount(booking.getBalanceAmount().add(slice.getAmount()));
             bookingRepository.save(booking);
@@ -256,6 +308,18 @@ public class PaymentService {
             auditLogService.recordPaymentDeleted(slice);
         }
         return true;
+    }
+
+    /**
+     * Putting a payment's amount back on a booking that was already closed out
+     * as SETTLED would leave it "settled" yet owing money, and it would never
+     * show up in Amount Due Bills (which only lists DUE). Refuse instead.
+     */
+    private static void requireNotSettled(Booking booking) {
+        if (booking.getSettlementStatus() == Booking.SettlementStatus.SETTLED) {
+            throw new IllegalStateException(
+                    "Booking " + booking.getBookingNumber() + " has been settled, so its payments can no longer be removed.");
+        }
     }
 
     /**
@@ -297,6 +361,7 @@ public class PaymentService {
                         + "history, which reverses all of it at once.");
             }
             Booking booking = payment.getBooking();
+            requireNotSettled(booking);
             booking.setBalanceAmount(booking.getBalanceAmount().add(payment.getAmount()));
             bookingRepository.save(booking);
 

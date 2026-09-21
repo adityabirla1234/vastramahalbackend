@@ -23,6 +23,8 @@ public interface ItemRepository extends JpaRepository<Item, Long> {
      */
     boolean existsByItemCode(String itemCode);
 
+    Optional<Item> findByIdempotencyKey(String idempotencyKey);
+
     /**
      * Row-level lock on the item being booked. Every booking-creation
      * transaction acquires this lock FIRST, before checking for date overlaps.

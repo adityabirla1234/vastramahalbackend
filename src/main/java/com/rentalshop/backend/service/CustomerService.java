@@ -27,11 +27,24 @@ public class CustomerService {
 
     @Transactional
     public CustomerResponse createCustomer(CreateCustomerRequest req) {
+        String idempotencyKey = req.getIdempotencyKey() == null || req.getIdempotencyKey().isBlank()
+                ? null : req.getIdempotencyKey().trim();
+        if (idempotencyKey != null) {
+            // Phone numbers are deliberately not unique (shared household
+            // numbers), so this key is the ONLY thing that stops a replayed
+            // create from producing a duplicate customer.
+            var existing = customerRepository.findByIdempotencyKey(idempotencyKey);
+            if (existing.isPresent()) {
+                return CustomerResponse.from(existing.get());
+            }
+        }
+
         Customer customer = new Customer();
         customer.setName(req.getName());
         customer.setPhone(req.getPhone());
         customer.setAddress(req.getAddress());
         customer.setNotes(req.getNotes());
+        customer.setIdempotencyKey(idempotencyKey);
 
         Customer saved = customerRepository.save(customer);
         auditLogService.recordCustomerCreated(saved);

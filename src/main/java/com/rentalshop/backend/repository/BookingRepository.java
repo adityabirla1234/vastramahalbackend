@@ -6,6 +6,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.time.LocalDate;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -113,4 +114,55 @@ public interface BookingRepository extends JpaRepository<Booking, Long> {
      * not four joined entity graphs.
      */
     long countByGroupId(String groupId);
+
+    /**
+     * Reminder: bookings due to go out on [date] that haven't yet. [statuses]
+     * is the pre-pickup set (PENDING/CONFIRMED) -- passed in rather than
+     * written as string literals so the enum, not a spelling, is what's
+     * matched. Only the customer is fetched: a reminder never touches the
+     * item or the accessories.
+     */
+    @Query("""
+       select b from Booking b
+       join fetch b.customer
+       where b.status in :statuses
+         and b.pickupDate = :date
+       order by b.id asc
+       """)
+    List<Booking> findPickupsOn(@Param("statuses") Collection<Booking.BookingStatus> statuses,
+                                @Param("date") LocalDate date);
+
+    /**
+     * Reminder: rows in [status] (PICKED_UP -- physically out) whose return
+     * date is today or already gone by. Unlike search(dueOnOrBefore), this
+     * never includes rows that haven't been picked up yet.
+     */
+    @Query("""
+       select b from Booking b
+       join fetch b.customer
+       where b.status = :status
+         and b.returnDate <= :today
+       order by b.id asc
+       """)
+    List<Booking> findOutOnOrPastReturnDate(@Param("status") Booking.BookingStatus status,
+                                            @Param("today") LocalDate today);
+
+    /**
+     * Reminder: returned rows still owing money past their return date --
+     * status RETURNED + settlementStatus DUE (the Amount Due Bills rule), a
+     * return date strictly before [today], and a balance actually left to
+     * collect (a DUE row with nothing owing has nothing to remind about).
+     */
+    @Query("""
+       select b from Booking b
+       join fetch b.customer
+       where b.status = :status
+         and b.settlementStatus = :settlement
+         and b.returnDate < :today
+         and b.balanceAmount > 0
+       order by b.id asc
+       """)
+    List<Booking> findUnsettledPastReturnDate(@Param("status") Booking.BookingStatus status,
+                                              @Param("settlement") Booking.SettlementStatus settlement,
+                                              @Param("today") LocalDate today);
 }

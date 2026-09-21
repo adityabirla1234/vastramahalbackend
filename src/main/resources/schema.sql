@@ -243,3 +243,16 @@ CREATE TABLE IF NOT EXISTS redundant_trail_entries (
 -- is mostly keeping up.
 CREATE INDEX idx_trail_telegram_status ON redundant_trail_entries (telegram_status);
 CREATE INDEX idx_trail_sheets_status ON redundant_trail_entries (sheets_status);
+
+-- Idempotent offline creates: the app queues item/customer creates while
+-- offline and replays them; this key (client-generated, stable across
+-- retries) lets the server recognise a replay instead of making a duplicate.
+-- Same ADD COLUMN IF NOT EXISTS pattern as above; with ddl-auto=update Hibernate
+-- adds the column and its unique index itself on next startup. Existing rows
+-- keep NULL, and MySQL allows any number of NULLs in a unique index.
+ALTER TABLE items ADD COLUMN IF NOT EXISTS idempotency_key VARCHAR(80);
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS idempotency_key VARCHAR(80);
+-- Plain CREATE UNIQUE INDEX (no IF NOT EXISTS on this MySQL version) -- skip
+-- if the index already exists.
+CREATE UNIQUE INDEX uq_item_idempotency_key ON items (idempotency_key);
+CREATE UNIQUE INDEX uq_customer_idempotency_key ON customers (idempotency_key);

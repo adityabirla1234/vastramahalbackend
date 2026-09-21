@@ -9,6 +9,7 @@ import com.rentalshop.backend.repository.ItemImageRepository;
 import com.rentalshop.backend.repository.ItemRepository;
 import com.rentalshop.backend.service.storage.ObjectStorageService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -32,6 +33,16 @@ public class ItemService {
 
     @Transactional
     public ItemResponse createItem(CreateItemRequest req) {
+        String idempotencyKey = req.getIdempotencyKey() == null || req.getIdempotencyKey().isBlank()
+                ? null : req.getIdempotencyKey().trim();
+        if (idempotencyKey != null) {
+            // A replay of a create that already succeeded (e.g. the response was
+            // lost and the app re-sent it): hand back what the first attempt made.
+            var existing = itemRepository.findByIdempotencyKey(idempotencyKey);
+            if (existing.isPresent()) {
+                return ItemResponse.from(existing.get());
+            }
+        }
         if (itemRepository.existsByItemCode(req.getItemCode())) {
             // Includes soft-deleted items on purpose -- a retired item_code
             // must never be silently reassigned to a different physical item.
@@ -40,6 +51,7 @@ public class ItemService {
 
         Item item = new Item();
         item.setItemCode(req.getItemCode());
+        item.setIdempotencyKey(idempotencyKey);
         item.setName(req.getName());
         item.setCategory(req.getCategory());
         item.setSubCategory(req.getSubCategory());
@@ -69,7 +81,12 @@ public class ItemService {
                     // WHERE id=? AND version=? matches zero rows and Hibernate raises
                     // OptimisticLockException -- mapped to 409 STALE_WRITE by
                     // GlobalExceptionHandler, same as a booking write conflict.
-                    item.setVersion(req.getVersion());
+                    // Explicit compare: Hibernate ignores a manually-assigned version on a
+                    // managed entity (its UPDATE uses the version it loaded), so
+                    // item.setVersion(req.getVersion()) would never raise a stale write.
+                    if (req.getVersion() == null || !req.getVersion().equals(item.getVersion())) {
+                        throw new ObjectOptimisticLockingFailureException(Item.class, item.getId());
+                    }
 
                     item.setName(req.getName());
                     item.setCategory(req.getCategory());

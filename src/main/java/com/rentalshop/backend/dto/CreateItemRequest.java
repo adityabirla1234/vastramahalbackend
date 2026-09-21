@@ -3,6 +3,7 @@ package com.rentalshop.backend.dto;
 import com.rentalshop.backend.entity.Item;
 import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
 import jakarta.validation.constraints.NotNull;
 import lombok.Getter;
 import lombok.Setter;
@@ -42,4 +43,13 @@ public class CreateItemRequest {
     private String description;
 
     private Item.ItemStatus status = Item.ItemStatus.ACTIVE;
+
+    /**
+     * Client-generated key, stable across retries of the SAME create (the app
+     * queues creates while offline and replays them). A repeat with a key that
+     * already exists returns the record the first attempt made instead of
+     * making a second one. Optional: older app builds don't send it.
+     */
+    @Size(max = 80)
+    private String idempotencyKey;
 }

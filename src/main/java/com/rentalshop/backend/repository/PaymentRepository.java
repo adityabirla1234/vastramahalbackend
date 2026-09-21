@@ -2,7 +2,10 @@ package com.rentalshop.backend.repository;
 
 import com.rentalshop.backend.entity.Payment;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
+import java.math.BigDecimal;
 import java.util.List;
 
 public interface PaymentRepository extends JpaRepository<Payment, Long> {
@@ -21,4 +24,8 @@ public interface PaymentRepository extends JpaRepository<Payment, Long> {
 
     /** The rows that made up one bill-level payment -- see Payment.groupPaymentRef. */
     List<Payment> findByGroupPaymentRef(String groupPaymentRef);
+
+    /** Total already collected against one booking row; null when there are no payments (callers treat that as zero). */
+    @Query("select sum(p.amount) from Payment p where p.booking.id = :bookingId")
+    BigDecimal sumAmountByBookingId(@Param("bookingId") Long bookingId);
 }

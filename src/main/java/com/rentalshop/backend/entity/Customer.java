@@ -35,6 +35,10 @@ public class Customer {
     @Column(name = "is_deleted", nullable = false)
     private boolean deleted = false;
 
+    /** See CreateItemRequest/CreateCustomerRequest.idempotencyKey. Nullable; unique when present. */
+    @Column(name = "idempotency_key", unique = true, length = 80)
+    private String idempotencyKey;
+
     @CreationTimestamp
     @Column(name = "created_at", updatable = false)
     private LocalDateTime createdAt;

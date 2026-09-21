@@ -213,10 +213,10 @@ public class BillActionService {
         }
 
         if (settlement == Booking.SettlementStatus.SETTLED) {
+            // Zeroes each row's remaining balance AND records the payment that
+            // closes it, so payment history matches the money collected.
+            paymentService.recordSettlement(bill);
             for (Booking row : bill) {
-                if (row.getBalanceAmount().signum() != 0) {
-                    row.setBalanceAmount(BigDecimal.ZERO);
-                }
                 // An earlier partial return may have left this row DUE; the
                 // bill is now settled, so it must not linger on the Amount
                 // Due Bills list.

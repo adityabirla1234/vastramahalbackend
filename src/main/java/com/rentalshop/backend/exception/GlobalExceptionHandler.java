@@ -1,6 +1,7 @@
 package com.rentalshop.backend.exception;
 
 import jakarta.persistence.OptimisticLockException;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
@@ -43,6 +44,17 @@ public class GlobalExceptionHandler {
         // App should refresh and let the user retry — never silently overwrite.
         return ResponseEntity.status(HttpStatus.CONFLICT)
                 .body(body("STALE_WRITE", "This record was changed elsewhere. Refresh and try again."));
+    }
+
+    /**
+     * A unique constraint fired at commit -- in practice two identical creates
+     * racing past the idempotency lookup. Answer 409 so the client treats it as
+     * "already exists / changed elsewhere" instead of an opaque 500.
+     */
+    @ExceptionHandler(DataIntegrityViolationException.class)
+    public ResponseEntity<Map<String, Object>> handleDataIntegrity(DataIntegrityViolationException ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(body("DUPLICATE", "A record with the same unique value already exists."));
     }
 
     @ExceptionHandler(IllegalArgumentException.class)

@@ -62,6 +62,10 @@ public class Item {
     @Column(nullable = false)
     private Long version = 0L;
 
+    /** See CreateItemRequest/CreateCustomerRequest.idempotencyKey. Nullable; unique when present. */
+    @Column(name = "idempotency_key", unique = true, length = 80)
+    private String idempotencyKey;
+
     @CreationTimestamp
     @Column(name = "created_at", updatable = false)
     private LocalDateTime createdAt;
