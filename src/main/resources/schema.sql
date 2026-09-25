@@ -259,8 +259,24 @@ CREATE UNIQUE INDEX uq_customer_idempotency_key ON customers (idempotency_key);
 -- Items/customers switched from soft delete to a real hard DELETE
 -- (ItemService.deleteItem / CustomerService.deleteCustomer now remove the
 -- row outright, blocked with a 409 when booking history still references
--- it). is_deleted is no longer read or written anywhere in the app, so it's
--- dropped here; same ADD/DROP COLUMN IF [NOT] EXISTS migration pattern as
--- above. Safe to re-run against a DB that's already had it dropped.
+-- it). The cleanup this needs for pre-existing soft-deleted rows (purge the
+-- ones with no booking history, drop is_deleted once it's empty of live
+-- data) runs automatically from app code instead of from this file --
+-- see LegacySoftDeleteCleanupRunner, since this project doesn't apply
+-- schema.sql anywhere. The two DELETE/ALTER statements below are kept only
+-- as a reference for anyone who DOES manage this schema by hand; they are
+-- exactly what that runner does.
+DELETE items FROM items
+LEFT JOIN bookings b ON b.item_id = items.id
+LEFT JOIN booking_accessories ba ON ba.item_id = items.id
+WHERE items.is_deleted = TRUE
+  AND b.id IS NULL
+  AND ba.id IS NULL;
+
+DELETE customers FROM customers
+LEFT JOIN bookings b ON b.customer_id = customers.id
+WHERE customers.is_deleted = TRUE
+  AND b.id IS NULL;
+
 ALTER TABLE items DROP COLUMN IF EXISTS is_deleted;
 ALTER TABLE customers DROP COLUMN IF EXISTS is_deleted;
