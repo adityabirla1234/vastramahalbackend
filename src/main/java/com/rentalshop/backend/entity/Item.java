@@ -49,9 +49,6 @@ public class Item {
     @Column(nullable = false, length = 20)
     private ItemStatus status = ItemStatus.ACTIVE;
 
-    @Column(name = "is_deleted", nullable = false)
-    private boolean deleted = false;
-
     /**
      * Optimistic concurrency guard. Hibernate manages this automatically on
      * every UPDATE; a stale write throws OptimisticLockException, which the

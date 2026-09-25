@@ -47,14 +47,20 @@ public class GlobalExceptionHandler {
     }
 
     /**
-     * A unique constraint fired at commit -- in practice two identical creates
-     * racing past the idempotency lookup. Answer 409 so the client treats it as
-     * "already exists / changed elsewhere" instead of an opaque 500.
+     * A constraint fired at commit -- in practice either a unique constraint
+     * (two identical creates racing past the idempotency lookup) or, since
+     * item/customer delete became a real hard DELETE, a foreign key still
+     * pointing at the row (ItemService/CustomerService check for this ahead
+     * of time and fail with a clearer 409 INVALID_STATE, but this is the
+     * backstop for a race between that check and the delete itself). Either
+     * way, answer 409 so the client treats it as "not applied, don't
+     * optimistically update" instead of an opaque 500.
      */
     @ExceptionHandler(DataIntegrityViolationException.class)
     public ResponseEntity<Map<String, Object>> handleDataIntegrity(DataIntegrityViolationException ex) {
         return ResponseEntity.status(HttpStatus.CONFLICT)
-                .body(body("DUPLICATE", "A record with the same unique value already exists."));
+                .body(body("DATA_CONFLICT",
+                        "This couldn't be completed: it either duplicates an existing record or is still referenced by another record."));
     }
 
     @ExceptionHandler(IllegalArgumentException.class)

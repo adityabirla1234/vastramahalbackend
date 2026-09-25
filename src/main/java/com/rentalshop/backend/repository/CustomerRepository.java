@@ -11,24 +11,19 @@ import java.util.Optional;
 public interface CustomerRepository extends JpaRepository<Customer, Long> {
 
     Optional<Customer> findByIdempotencyKey(String idempotencyKey);
-    List<Customer> findByDeletedFalseAndPhoneContaining(String phoneFragment);
-    List<Customer> findByDeletedFalseAndNameContainingIgnoreCase(String nameFragment);
 
     /**
      * Backs the customers list screen -- same shape as ItemRepository.search.
      * query is optional (pass null/blank to list everyone) and matches
      * against name OR phone, since staff on the shop floor will look
-     * customers up by either. includeDeleted defaults to false everywhere
-     * except an explicit admin "show removed customers" view.
+     * customers up by either.
      */
     @Query("""
            select c from Customer c
-           where (:includeDeleted = true or c.deleted = false)
-             and (:query is null or :query = ''
+           where (:query is null or :query = ''
                   or lower(c.name) like lower(concat('%', :query, '%'))
                   or c.phone like concat('%', :query, '%'))
            order by c.name
            """)
-    List<Customer> search(@Param("query") String query,
-                           @Param("includeDeleted") boolean includeDeleted);
+    List<Customer> search(@Param("query") String query);
 }

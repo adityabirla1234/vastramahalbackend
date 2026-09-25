@@ -24,8 +24,9 @@ import java.time.LocalDateTime;
  *
  *   1. An item can be renamed or re-categorised later; an old bill must keep
  *      showing what actually went out that day, not today's spelling.
- *   2. An item can be soft-deleted (ItemService.deleteItem) -- a bill from
- *      two years ago would otherwise render blanks for a retired accessory.
+ *   2. An item referenced here can never be hard-deleted (ItemService.deleteItem
+ *      blocks it) -- but even so, a bill from two years ago renders entirely
+ *      from this snapshot rather than depending on that still being true.
  *   3. Rendering a bill or the booking-history list costs no per-accessory
  *      item lookup at all.
  *

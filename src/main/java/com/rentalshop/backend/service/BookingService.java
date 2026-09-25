@@ -19,6 +19,8 @@ import com.rentalshop.backend.repository.BookingRepository;
 import com.rentalshop.backend.repository.CustomerRepository;
 import com.rentalshop.backend.repository.PaymentRepository;
 import com.rentalshop.backend.repository.ItemRepository;
+import com.rentalshop.backend.repository.ItemImageRepository;
+import com.rentalshop.backend.service.storage.ObjectStorageService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
@@ -33,9 +35,11 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 /**
  * Booking creation is the single highest-risk piece of business logic in the
@@ -67,6 +71,41 @@ public class BookingService {
     private final AuditLogService auditLogService;
     private final PaymentRepository paymentRepository;
     private final PaymentService paymentService;
+    private final ItemImageRepository itemImageRepository;
+    private final ObjectStorageService objectStorageService;
+
+    /**
+     * Single-row lookup for the "one booking" call sites below (create,
+     * pickup/return/settle, add/update item, get-by-id) -- same cost shape
+     * as ItemService resolving a single ItemResponse's primaryImageUrl.
+     * Never null-pointers on an item with no photos: findByItemIdAndPrimaryTrue
+     * returns empty in that case, same as the bulk projection below.
+     */
+    private String resolveItemImageUrl(Long itemId) {
+        return itemImageRepository.findByItemIdAndPrimaryTrue(itemId)
+                .map(image -> objectStorageService.publicUrl(image.getImageKey()))
+                .orElse(null);
+    }
+
+    /**
+     * Bulk lookup for the list-producing call sites (listBookings,
+     * getGroupBookings, getItemCalendar) -- one query for the whole page's
+     * primary-image keys rather than one per row, mirroring
+     * ItemService.toListResponses exactly.
+     */
+    private List<BookingResponse> toResponses(List<Booking> bookings) {
+        if (bookings.isEmpty()) {
+            return List.of();
+        }
+        List<Long> itemIds = bookings.stream().map(b -> b.getItem().getId()).distinct().toList();
+        Map<Long, String> imageUrlByItemId = itemImageRepository.findPrimaryImageKeysForItems(itemIds).stream()
+                .collect(Collectors.toMap(
+                        ItemImageRepository.PrimaryImageProjection::getItemId,
+                        p -> objectStorageService.publicUrl(p.getImageKey())));
+        return bookings.stream()
+                .map(b -> BookingResponse.from(b, imageUrlByItemId.get(b.getItem().getId())))
+                .toList();
+    }
 
     /**
      * Self-injected proxy (standard Spring self-injection pattern, @Lazy to
@@ -106,7 +145,8 @@ public class BookingService {
         // succeeded, return the prior result instead of re-processing.
         var existing = bookingRepository.findByIdempotencyKey(req.getIdempotencyKey());
         if (existing.isPresent()) {
-            return BookingResponse.from(existing.get());
+            Booking existingBooking = existing.get();
+            return BookingResponse.from(existingBooking, resolveItemImageUrl(existingBooking.getItem().getId()));
         }
 
         if (req.getReturnDate().isBefore(req.getPickupDate())) {
@@ -120,7 +160,7 @@ public class BookingService {
         Item item = itemRepository.findByIdForUpdate(req.getItemId())
                 .orElseThrow(() -> new IllegalArgumentException("Item not found: " + req.getItemId()));
 
-        if (item.isDeleted() || item.getStatus() != Item.ItemStatus.ACTIVE) {
+        if (item.getStatus() != Item.ItemStatus.ACTIVE) {
             throw new IllegalStateException("Item is not currently bookable: " + item.getItemCode());
         }
 
@@ -179,7 +219,7 @@ public class BookingService {
         // a slow Telegram API can never block or fail the booking transaction).
         auditLogService.recordBookingCreated(saved);
 
-        return BookingResponse.from(saved);
+        return BookingResponse.from(saved, resolveItemImageUrl(saved.getItem().getId()));
     }
 
     /**
@@ -269,9 +309,7 @@ public class BookingService {
      */
     @Transactional(readOnly = true)
     public List<BookingResponse> getGroupBookings(String groupId) {
-        return bookingRepository.findByGroupIdWithDetails(groupId).stream()
-                .map(BookingResponse::from)
-                .toList();
+        return toResponses(bookingRepository.findByGroupIdWithDetails(groupId));
     }
 
     /**
@@ -381,7 +419,7 @@ public class BookingService {
                     booking.setStatus(target);
                     Booking saved = bookingRepository.save(booking);
                     auditLogService.recordBookingStatusChanged(saved, previousStatus);
-                    return BookingResponse.from(saved);
+                    return BookingResponse.from(saved, resolveItemImageUrl(saved.getItem().getId()));
                 });
     }
 
@@ -444,7 +482,7 @@ public class BookingService {
                 auditLogService.recordBillSettled(sibling);
             }
 
-            return BookingResponse.from(saved);
+            return BookingResponse.from(saved, resolveItemImageUrl(saved.getItem().getId()));
         });
     }
 
@@ -568,7 +606,7 @@ public class BookingService {
 
             Booking saved = bookingRepository.save(booking);
             auditLogService.recordBookingItemUpdated(before, saved);
-            return BookingResponse.from(saved);
+            return BookingResponse.from(saved, resolveItemImageUrl(saved.getItem().getId()));
         });
     }
 
@@ -595,7 +633,7 @@ public class BookingService {
         Item newItem = itemRepository.findByIdForUpdate(newItemId)
                 .orElseThrow(() -> new IllegalArgumentException("Item not found: " + newItemId));
 
-        if (newItem.isDeleted() || newItem.getStatus() != Item.ItemStatus.ACTIVE) {
+        if (newItem.getStatus() != Item.ItemStatus.ACTIVE) {
             throw new IllegalStateException("Item is not currently bookable: " + newItem.getItemCode());
         }
 
@@ -656,7 +694,7 @@ public class BookingService {
 
             Booking saved = bookingRepository.save(booking);
             auditLogService.recordBookingItemRemoved(before, saved);
-            return BookingResponse.from(saved);
+            return BookingResponse.from(saved, resolveItemImageUrl(saved.getItem().getId()));
         });
     }
 
@@ -736,9 +774,7 @@ public class BookingService {
     @Transactional(readOnly = true)
     public List<BookingResponse> listBookings(Booking.BookingStatus status, Long itemId,
                                                Long customerId, LocalDate dueOnOrBefore) {
-        return bookingRepository.search(status, itemId, customerId, dueOnOrBefore).stream()
-                .map(BookingResponse::from)
-                .toList();
+        return toResponses(bookingRepository.search(status, itemId, customerId, dueOnOrBefore));
     }
 
     /**
@@ -751,17 +787,15 @@ public class BookingService {
      * the calendar screen would show dates as free that the create endpoint
      * would then reject, which is a worse bug than a little query reuse.
      *
-     * Returns empty if no non-deleted item exists with this id, so the
-     * controller can map that to 404 the same way item lookups already do.
+     * Returns empty if no item exists with this id, so the controller can
+     * map that to 404 the same way item lookups already do.
      */
     @Transactional(readOnly = true)
     public Optional<List<BookingResponse>> getItemCalendar(Long itemId, LocalDate start, LocalDate end) {
         return itemRepository.findById(itemId)
-                .filter(item -> !item.isDeleted())
-                .map(item -> bookingRepository.findOverlapping(itemId, start, end, -1L).stream()
+                .map(item -> toResponses(bookingRepository.findOverlapping(itemId, start, end, -1L).stream()
                         .sorted((a, b) -> a.getPickupDate().compareTo(b.getPickupDate()))
-                        .map(BookingResponse::from)
-                        .toList());
+                        .toList()));
     }
 
     // Deposit is intentionally excluded here -- at creation time it's always
@@ -777,7 +811,8 @@ public class BookingService {
 
     @Transactional(readOnly = true)
     public Optional<BookingResponse> getBooking(Long id) {
-        return bookingRepository.findByIdWithDetails(id).map(BookingResponse::from);
+        return bookingRepository.findByIdWithDetails(id)
+                .map(b -> BookingResponse.from(b, resolveItemImageUrl(b.getItem().getId())));
     }
 
     /**
@@ -825,7 +860,6 @@ public class BookingService {
             }
 
             Item accessoryItem = itemRepository.findById(accessoryRequest.getItemId())
-                    .filter(i -> !i.isDeleted())
                     .orElseThrow(() -> new IllegalArgumentException(
                             "Accessory item not found: " + accessoryRequest.getItemId()));
 

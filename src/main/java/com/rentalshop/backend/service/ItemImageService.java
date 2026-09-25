@@ -54,7 +54,6 @@ public class ItemImageService {
     @Transactional
     public ItemImageResponse uploadImage(Long itemId, MultipartFile file, boolean makePrimary) {
         Item item = itemRepository.findById(itemId)
-                .filter(i -> !i.isDeleted())
                 .orElseThrow(() -> new IllegalArgumentException("Item not found: " + itemId));
 
         if (file.isEmpty()) {

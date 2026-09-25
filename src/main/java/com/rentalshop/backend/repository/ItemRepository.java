@@ -14,13 +14,8 @@ import java.util.Optional;
 
 public interface ItemRepository extends JpaRepository<Item, Long> {
 
-    Optional<Item> findByItemCodeAndDeletedFalse(String itemCode);
+    Optional<Item> findByItemCode(String itemCode);
 
-    /**
-     * Checked on create against ALL items, including soft-deleted ones --
-     * item_code has a hard unique constraint in the schema regardless of
-     * is_deleted, so a retired code must stay reserved.
-     */
     boolean existsByItemCode(String itemCode);
 
     Optional<Item> findByIdempotencyKey(String idempotencyKey);
@@ -41,7 +36,7 @@ public interface ItemRepository extends JpaRepository<Item, Long> {
     @Query("select i from Item i where i.id = :id")
     Optional<Item> findByIdForUpdate(@Param("id") Long id);
 
-    List<Item> findByDeletedFalseAndStatus(Item.ItemStatus status);
+    List<Item> findByStatus(Item.ItemStatus status);
 
     /**
      * Section 3.6: returns only items with NO overlapping active booking for
@@ -55,8 +50,7 @@ public interface ItemRepository extends JpaRepository<Item, Long> {
      */
     @Query("""
            select i from Item i
-           where i.deleted = false
-             and i.status = 'ACTIVE'
+           where i.status = 'ACTIVE'
              and (:category is null or i.category = :category)
              and not exists (
                  select 1 from Booking b
@@ -73,19 +67,16 @@ public interface ItemRepository extends JpaRepository<Item, Long> {
 
     /**
      * Backs the inventory list screen. category and status are both
-     * optional (pass null to not filter on them); includeDeleted defaults
-     * to false everywhere except an explicit admin "show retired items" view.
+     * optional (pass null to not filter on them).
      */
     @Query("""
            select i from Item i
-           where (:includeDeleted = true or i.deleted = false)
-             and (:category is null or i.category = :category)
+           where (:category is null or i.category = :category)
              and (:status is null or i.status = :status)
            order by i.name
            """)
     List<Item> search(@Param("category") String category,
-                       @Param("status") Item.ItemStatus status,
-                       @Param("includeDeleted") boolean includeDeleted);
+                       @Param("status") Item.ItemStatus status);
 
     /**
      * Backs the New Booking form's "Add accessory" picker: every bookable
@@ -103,9 +94,8 @@ public interface ItemRepository extends JpaRepository<Item, Long> {
      * Deliberately no date-range availability filter, unlike
      * findAvailableInRange above: attaching an accessory to a booking does
      * not book it (see BookingAccessory's class doc), so there is no
-     * occupied/free state to filter on. Retired (soft-deleted) and
-     * non-ACTIVE items are still excluded -- a damaged or lost accessory
-     * shouldn't be offered.
+     * occupied/free state to filter on. Non-ACTIVE items are still excluded
+     * -- a damaged or lost accessory shouldn't be offered.
      *
      * No name/code filter here either: the picker loads the bucket once and
      * filters locally as staff type, so searching costs no round trip --
@@ -114,8 +104,7 @@ public interface ItemRepository extends JpaRepository<Item, Long> {
      */
     @Query("""
            select i from Item i
-           where i.deleted = false
-             and i.status = 'ACTIVE'
+           where i.status = 'ACTIVE'
              and (lower(trim(i.category)) in :matchTerms
                   or lower(trim(i.subCategory)) in :matchTerms)
            order by i.name

@@ -27,19 +27,15 @@ public class CustomerController {
      * Customers list screen. query is optional and matches name OR phone
      * (see CustomerRepository.search) -- covers both "type the customer's
      * name" and "type the phone number they're calling from" lookup flows.
-     * includeDeleted defaults to false, same convention as /api/items.
      */
     @GetMapping
-    public ResponseEntity<List<CustomerResponse>> list(
-            @RequestParam(required = false) String query,
-            @RequestParam(defaultValue = "false") boolean includeDeleted) {
-        return ResponseEntity.ok(customerService.listCustomers(query, includeDeleted));
+    public ResponseEntity<List<CustomerResponse>> list(@RequestParam(required = false) String query) {
+        return ResponseEntity.ok(customerService.listCustomers(query));
     }
 
     @GetMapping("/{id}")
     public ResponseEntity<CustomerResponse> findById(@PathVariable Long id) {
         return customerRepository.findById(id)
-                .filter(c -> !c.isDeleted())
                 .map(CustomerResponse::from)
                 .map(ResponseEntity::ok)
                 .orElseGet(() -> ResponseEntity.notFound().build());
@@ -60,7 +56,11 @@ public class CustomerController {
                 .orElseGet(() -> ResponseEntity.notFound().build());
     }
 
-    /** Soft delete -- see CustomerService.deleteCustomer for why this never hard-deletes. */
+    /**
+     * Hard delete — see CustomerService.deleteCustomer. 404 if the
+     * customer doesn't exist, 409 INVALID_STATE if they still have booking
+     * history.
+     */
     @DeleteMapping("/{id}")
     @RequireRole(Owner.Role.ADMIN)
     public ResponseEntity<Void> delete(@PathVariable Long id) {

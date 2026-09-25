@@ -17,9 +17,9 @@ public class CreateItemRequest {
     /**
      * The physical tag/code written on the item itself -- typed by an admin,
      * not generated server-side, since it needs to match what's already on
-     * the shop floor. Uniqueness (including against soft-deleted items, so a
-     * retired code is never silently reused for a different physical item)
-     * is enforced in {@code ItemService}.
+     * the shop floor. Uniqueness against every current item is enforced in
+     * {@code ItemService}; deleting an item is a hard delete, so its code
+     * becomes free to reuse afterwards.
      */
     @NotBlank
     private String itemCode;

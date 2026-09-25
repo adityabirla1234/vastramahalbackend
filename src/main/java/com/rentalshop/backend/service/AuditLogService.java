@@ -163,7 +163,6 @@ public class AuditLogService {
         m.put("color", item.getColor());
         m.put("rentalPrice", item.getRentalPrice());
         m.put("status", item.getStatus());
-        m.put("deleted", item.isDeleted());
         return m;
     }
 
@@ -174,7 +173,6 @@ public class AuditLogService {
         m.put("phone", customer.getPhone());
         m.put("address", customer.getAddress());
         m.put("notes", customer.getNotes());
-        m.put("deleted", customer.isDeleted());
         return m;
     }
 

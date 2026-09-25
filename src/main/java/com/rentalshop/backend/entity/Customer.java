@@ -32,9 +32,6 @@ public class Customer {
     @Column(columnDefinition = "TEXT")
     private String notes;
 
-    @Column(name = "is_deleted", nullable = false)
-    private boolean deleted = false;
-
     /** See CreateItemRequest/CreateCustomerRequest.idempotencyKey. Nullable; unique when present. */
     @Column(name = "idempotency_key", unique = true, length = 80)
     private String idempotencyKey;

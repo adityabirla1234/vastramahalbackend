@@ -4,6 +4,7 @@ import com.rentalshop.backend.dto.CreateCustomerRequest;
 import com.rentalshop.backend.dto.CustomerResponse;
 import com.rentalshop.backend.dto.UpdateCustomerRequest;
 import com.rentalshop.backend.entity.Customer;
+import com.rentalshop.backend.repository.BookingRepository;
 import com.rentalshop.backend.repository.CustomerRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -14,9 +15,8 @@ import java.util.Optional;
 
 /**
  * Customer CRUD (development plan: "Customer CRUD endpoints"). Same shape
- * as ItemService -- soft delete only, no hard deletes, since a booking's
- * customer_id foreign key must keep resolving for historical bookings even
- * after a customer record is retired.
+ * as ItemService -- hard delete, blocked when booking history still
+ * references the customer.
  */
 @Service
 @RequiredArgsConstructor
@@ -24,6 +24,7 @@ public class CustomerService {
 
     private final CustomerRepository customerRepository;
     private final AuditLogService auditLogService;
+    private final BookingRepository bookingRepository;
 
     @Transactional
     public CustomerResponse createCustomer(CreateCustomerRequest req) {
@@ -51,11 +52,10 @@ public class CustomerService {
         return CustomerResponse.from(saved);
     }
 
-    /** Returns empty if no non-deleted customer exists with this id. */
+    /** Returns empty if no customer exists with this id. */
     @Transactional
     public Optional<CustomerResponse> updateCustomer(Long id, UpdateCustomerRequest req) {
         return customerRepository.findById(id)
-                .filter(c -> !c.isDeleted())
                 .map(customer -> {
                     // Captured before any mutation below, same reasoning as
                     // ItemService.updateItem's before-snapshot.
@@ -73,26 +73,35 @@ public class CustomerService {
     }
 
     /**
-     * Soft delete only -- bookings referencing this customer (past or
-     * future) must keep resolving customer_id for history/receipts, so a
-     * hard DELETE is never used here, same reasoning as ItemService.deleteItem.
+     * Hard delete. Blocked (409 INVALID_STATE) when the customer still has
+     * booking history -- bookings.customer_id has a plain FK with no
+     * ON DELETE clause in schema.sql precisely so a historical booking can
+     * never end up pointing at a row that no longer exists, so that case is
+     * checked explicitly here to fail with a clear message rather than a
+     * raw DB constraint-violation error. A customer with no bookings can be
+     * deleted freely.
      */
     @Transactional
     public boolean deleteCustomer(Long id) {
-        return customerRepository.findById(id)
-                .filter(c -> !c.isDeleted())
-                .map(customer -> {
-                    customer.setDeleted(true);
-                    customerRepository.save(customer);
-                    auditLogService.recordCustomerDeleted(customer);
-                    return true;
-                })
-                .orElse(false);
+        Customer customer = customerRepository.findById(id).orElse(null);
+        if (customer == null) {
+            return false;
+        }
+
+        if (bookingRepository.existsByCustomerId(id)) {
+            throw new IllegalStateException(
+                    "Cannot delete customer " + customer.getName() +
+                    ": they have booking history on record.");
+        }
+
+        auditLogService.recordCustomerDeleted(customer);
+        customerRepository.delete(customer);
+        return true;
     }
 
     @Transactional(readOnly = true)
-    public List<CustomerResponse> listCustomers(String query, boolean includeDeleted) {
-        return customerRepository.search(query, includeDeleted).stream()
+    public List<CustomerResponse> listCustomers(String query) {
+        return customerRepository.search(query).stream()
                 .map(CustomerResponse::from)
                 .toList();
     }

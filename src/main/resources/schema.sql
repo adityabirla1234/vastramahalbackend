@@ -34,7 +34,6 @@ CREATE TABLE IF NOT EXISTS items (
     rental_price    DECIMAL(10,2)       NOT NULL DEFAULT 0,
     description     TEXT,
     status          VARCHAR(20)         NOT NULL DEFAULT 'ACTIVE', -- ACTIVE|INACTIVE|MAINTENANCE|LOST|DAMAGED
-    is_deleted      BOOLEAN             NOT NULL DEFAULT FALSE,    -- soft delete
     version         BIGINT              NOT NULL DEFAULT 0,        -- optimistic concurrency
     created_at      TIMESTAMP           DEFAULT CURRENT_TIMESTAMP,
     updated_at      TIMESTAMP           DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -58,7 +57,6 @@ CREATE TABLE IF NOT EXISTS customers (
     phone           VARCHAR(20)         NOT NULL,
     address         VARCHAR(300),
     notes           TEXT,
-    is_deleted      BOOLEAN             NOT NULL DEFAULT FALSE,
     created_at      TIMESTAMP           DEFAULT CURRENT_TIMESTAMP,
     updated_at      TIMESTAMP           DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     KEY idx_customer_phone (phone)
@@ -152,10 +150,11 @@ ALTER TABLE bookings ADD COLUMN IF NOT EXISTS deposit_return_reason VARCHAR(500)
 -- item_code/item_name/category are SNAPSHOTS copied off the inventory item
 -- at booking time, not a live join (see BookingAccessory's class doc): an
 -- old bill has to keep rendering what actually went out that day even after
--- the item is renamed, re-categorised or retired. item_id is kept purely so
--- the app can deep-link to the live product when it still exists, which is
--- also why its FK has no ON DELETE clause -- items are only ever
--- soft-deleted (ItemService.deleteItem), so the row never disappears.
+-- the item is renamed or re-categorised. item_id is kept purely so the app
+-- can deep-link to the live product when it still exists, which is also why
+-- its FK has no ON DELETE clause -- items are hard-deleted (ItemService),
+-- but ItemService blocks deleting an item still referenced by a row here,
+-- so the row this FK points at never disappears out from under it.
 --
 -- The unique key is what makes the "same accessory ticked twice" case a
 -- no-op rather than a duplicate bill line; BookingService.attachAccessories
@@ -256,3 +255,12 @@ ALTER TABLE customers ADD COLUMN IF NOT EXISTS idempotency_key VARCHAR(80);
 -- if the index already exists.
 CREATE UNIQUE INDEX uq_item_idempotency_key ON items (idempotency_key);
 CREATE UNIQUE INDEX uq_customer_idempotency_key ON customers (idempotency_key);
+
+-- Items/customers switched from soft delete to a real hard DELETE
+-- (ItemService.deleteItem / CustomerService.deleteCustomer now remove the
+-- row outright, blocked with a 409 when booking history still references
+-- it). is_deleted is no longer read or written anywhere in the app, so it's
+-- dropped here; same ADD/DROP COLUMN IF [NOT] EXISTS migration pattern as
+-- above. Safe to re-run against a DB that's already had it dropped.
+ALTER TABLE items DROP COLUMN IF EXISTS is_deleted;
+ALTER TABLE customers DROP COLUMN IF EXISTS is_deleted;

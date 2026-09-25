@@ -5,6 +5,9 @@ import com.rentalshop.backend.dto.ItemResponse;
 import com.rentalshop.backend.dto.UpdateItemRequest;
 import com.rentalshop.backend.entity.AccessoryCategory;
 import com.rentalshop.backend.entity.Item;
+import com.rentalshop.backend.entity.ItemImage;
+import com.rentalshop.backend.repository.BookingAccessoryRepository;
+import com.rentalshop.backend.repository.BookingRepository;
 import com.rentalshop.backend.repository.ItemImageRepository;
 import com.rentalshop.backend.repository.ItemRepository;
 import com.rentalshop.backend.service.storage.ObjectStorageService;
@@ -30,6 +33,8 @@ public class ItemService {
     private final ItemImageRepository itemImageRepository;
     private final ObjectStorageService objectStorageService;
     private final AuditLogService auditLogService;
+    private final BookingRepository bookingRepository;
+    private final BookingAccessoryRepository bookingAccessoryRepository;
 
     @Transactional
     public ItemResponse createItem(CreateItemRequest req) {
@@ -44,8 +49,6 @@ public class ItemService {
             }
         }
         if (itemRepository.existsByItemCode(req.getItemCode())) {
-            // Includes soft-deleted items on purpose -- a retired item_code
-            // must never be silently reassigned to a different physical item.
             throw new IllegalArgumentException("itemCode already in use: " + req.getItemCode());
         }
 
@@ -66,11 +69,10 @@ public class ItemService {
         return ItemResponse.from(saved);
     }
 
-    /** Returns empty if no non-deleted item exists with this id. */
+    /** Returns empty if no item exists with this id. */
     @Transactional
     public java.util.Optional<ItemResponse> updateItem(Long id, UpdateItemRequest req) {
         return itemRepository.findById(id)
-                .filter(i -> !i.isDeleted())
                 .map(item -> {
                     // Captured before any mutation below, so the audit row can show
                     // a real before/after diff instead of just the post-write state.
@@ -104,26 +106,47 @@ public class ItemService {
     }
 
     /**
-     * Soft delete only (is_deleted=true) -- item_images and any historical
-     * bookings referencing this item must remain intact for records/history,
-     * so a hard DELETE is never used here.
+     * Hard delete. Blocked (409 INVALID_STATE) when the item is still
+     * referenced by a booking or by a past booking's accessory snapshot --
+     * both bookings.item_id and booking_accessories.item_id have a plain FK
+     * with no ON DELETE clause in schema.sql precisely so historical bills
+     * can never end up pointing at a row that no longer exists, so those
+     * cases are checked explicitly here to fail with a clear message rather
+     * than a raw DB constraint-violation error. An item with no history can
+     * be deleted freely; retire it via status instead if it might get
+     * history later.
+     *
+     * Any uploaded photos are removed from object storage first -- their
+     * item_images rows are cleaned up as a side effect of the DB's own
+     * ON DELETE CASCADE on item_id, but the actual bytes in the storage
+     * provider are not the DB's problem to clean up.
      */
     @Transactional
     public boolean deleteItem(Long id) {
-        return itemRepository.findById(id)
-                .filter(i -> !i.isDeleted())
-                .map(item -> {
-                    item.setDeleted(true);
-                    itemRepository.save(item);
-                    auditLogService.recordItemDeleted(item);
-                    return true;
-                })
-                .orElse(false);
+        Item item = itemRepository.findById(id).orElse(null);
+        if (item == null) {
+            return false;
+        }
+
+        if (bookingRepository.existsByItemId(id) || bookingAccessoryRepository.existsByItemId(id)) {
+            throw new IllegalStateException(
+                    "Cannot delete item " + item.getItemCode() +
+                    ": it has booking history. Change its status instead of deleting it.");
+        }
+
+        List<ItemImage> images = itemImageRepository.findByItemIdOrderByDisplayOrderAsc(id);
+        for (ItemImage image : images) {
+            objectStorageService.delete(image.getImageKey());
+        }
+
+        auditLogService.recordItemDeleted(item);
+        itemRepository.delete(item);
+        return true;
     }
 
     @Transactional(readOnly = true)
-    public List<ItemResponse> listItems(String category, Item.ItemStatus status, boolean includeDeleted) {
-        return toListResponses(itemRepository.search(category, status, includeDeleted));
+    public List<ItemResponse> listItems(String category, Item.ItemStatus status) {
+        return toListResponses(itemRepository.search(category, status));
     }
 
     /**

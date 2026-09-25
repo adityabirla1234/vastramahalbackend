@@ -14,6 +14,12 @@ public interface BookingRepository extends JpaRepository<Booking, Long> {
 
     Optional<Booking> findByIdempotencyKey(String idempotencyKey);
 
+    /** Blocks a hard delete of an item that still has booking history referencing it. */
+    boolean existsByItemId(Long itemId);
+
+    /** Blocks a hard delete of a customer that still has booking history referencing it. */
+    boolean existsByCustomerId(Long customerId);
+
     Optional<Booking> findByBookingNumber(String bookingNumber);
     @Query("""
        select b from Booking b

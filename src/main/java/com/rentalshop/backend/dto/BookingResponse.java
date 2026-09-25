@@ -30,6 +30,17 @@ public class BookingResponse {
      * re-file at any time.
      */
     private String itemSize;
+
+    /**
+     * Public URL of the item's primary photo (same value ItemResponse would
+     * report for this item), so any screen that renders a booking -- booking
+     * history, a bill's item list, the WhatsApp confirmation -- can offer a
+     * "View Image" affordance without a second per-item lookup. Null when
+     * the item has no photo uploaded yet. Resolved by BookingService the
+     * same way ItemService resolves ItemResponse.primaryImageUrl: a bulk
+     * lookup for list endpoints, a single lookup for single-booking reads.
+     */
+    private String itemImageUrl;
     private Long customerId;
     private String customerName;
     /** Amount Due Bills (Customers section): lets the app show who to call without a second lookup. */
@@ -88,7 +99,13 @@ public class BookingResponse {
      */
     private List<BookingAccessoryResponse> accessories;
 
+    /** Convenience for call sites that don't have (or don't need) the item's photo resolved -- see {@link #from(Booking, String)}. */
     public static BookingResponse from(Booking b) {
+        return from(b, null);
+    }
+
+    /** [itemImageUrl] is resolved by the caller (BookingService) -- this DTO has no repository access of its own. */
+    public static BookingResponse from(Booking b, String itemImageUrl) {
         return BookingResponse.builder()
                 .id(b.getId())
                 .bookingNumber(b.getBookingNumber())
@@ -96,6 +113,7 @@ public class BookingResponse {
                 .itemCode(b.getItem().getItemCode())
                 .itemName(b.getItem().getName())
                 .itemSize(b.getItem().getSize())
+                .itemImageUrl(itemImageUrl)
                 .customerId(b.getCustomer().getId())
                 .customerName(b.getCustomer().getName())
                 .customerPhone(b.getCustomer().getPhone())

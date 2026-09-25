@@ -39,7 +39,7 @@ public class ItemController {
      */
     @GetMapping("/by-code/{itemCode}")
     public ResponseEntity<ItemResponse> findByCode(@PathVariable String itemCode) {
-        return itemRepository.findByItemCodeAndDeletedFalse(itemCode)
+        return itemRepository.findByItemCode(itemCode)
                 .map(this::withImages)
                 .map(ResponseEntity::ok)
                 .orElseGet(() -> ResponseEntity.notFound().build());
@@ -48,25 +48,22 @@ public class ItemController {
     @GetMapping("/{id}")
     public ResponseEntity<ItemResponse> findById(@PathVariable Long id) {
         return itemRepository.findById(id)
-                .filter(i -> !i.isDeleted())
                 .map(this::withImages)
                 .map(ResponseEntity::ok)
                 .orElseGet(() -> ResponseEntity.notFound().build());
     }
 
     /**
-     * Inventory list screen. category/status are optional filters;
-     * includeDeleted defaults to false and should only be set true from an
-     * explicit "show retired items" admin view. The full photo gallery is
-     * intentionally NOT included per row here — only a bulk-resolved
-     * primaryImageUrl for the grid thumbnail — see ItemResponse's Javadoc.
+     * Inventory list screen. category/status are both optional filters. The
+     * full photo gallery is intentionally NOT included per row here — only
+     * a bulk-resolved primaryImageUrl for the grid thumbnail — see
+     * ItemResponse's Javadoc.
      */
     @GetMapping
     public ResponseEntity<List<ItemResponse>> list(
             @RequestParam(required = false) String category,
-            @RequestParam(required = false) Item.ItemStatus status,
-            @RequestParam(defaultValue = "false") boolean includeDeleted) {
-        return ResponseEntity.ok(itemService.listItems(category, status, includeDeleted));
+            @RequestParam(required = false) Item.ItemStatus status) {
+        return ResponseEntity.ok(itemService.listItems(category, status));
     }
 
     /**
@@ -106,7 +103,10 @@ public class ItemController {
                 .orElseGet(() -> ResponseEntity.notFound().build());
     }
 
-    /** Soft delete — see ItemService.deleteItem for why this never hard-deletes. */
+    /**
+     * Hard delete — see ItemService.deleteItem. 404 if the item doesn't
+     * exist, 409 INVALID_STATE if it still has booking history.
+     */
     @DeleteMapping("/{id}")
     @RequireRole(Owner.Role.ADMIN)
     public ResponseEntity<Void> delete(@PathVariable Long id) {
