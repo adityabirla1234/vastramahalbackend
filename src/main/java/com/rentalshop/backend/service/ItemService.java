@@ -116,10 +116,17 @@ public class ItemService {
      * be deleted freely; retire it via status instead if it might get
      * history later.
      *
-     * Any uploaded photos are removed from object storage first -- their
-     * item_images rows are cleaned up as a side effect of the DB's own
-     * ON DELETE CASCADE on item_id, but the actual bytes in the storage
-     * provider are not the DB's problem to clean up.
+     * Any uploaded photos are removed from object storage AND their
+     * item_images rows explicitly deleted here, ahead of the item itself --
+     * relying on the DB's own ON DELETE CASCADE for the rows isn't enough
+     * once those rows have been loaded into this same persistence context
+     * (they need to be, to get each imageKey for the storage cleanup):
+     * Hibernate has no visibility into a cascade that happens silently at
+     * the DB level, so at flush time it still sees those managed ItemImage
+     * entities pointing at an Item about to be removed and refuses with
+     * TransientPropertyValueException. Deleting them through the
+     * repository instead makes Hibernate schedule the child DELETEs itself,
+     * in the correct order, before the parent's.
      */
     @Transactional
     public boolean deleteItem(Long id) {
@@ -138,6 +145,7 @@ public class ItemService {
         for (ItemImage image : images) {
             objectStorageService.delete(image.getImageKey());
         }
+        itemImageRepository.deleteAll(images);
 
         auditLogService.recordItemDeleted(item);
         itemRepository.delete(item);
