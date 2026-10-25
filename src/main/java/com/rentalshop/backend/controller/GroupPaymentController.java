@@ -65,6 +65,22 @@ public class GroupPaymentController {
     }
 
     /**
+     * Edits a bill-level payment (amount, date, method, notes) by its ref;
+     * the old slices are reversed and the new amount re-split across the
+     * items under the same ref. 404 if no such payment on this bill, 400 if
+     * the amount exceeds what the bill can take, 409 if the bill is settled.
+     */
+    @PutMapping("/{groupPaymentRef}")
+    @RequireRole(Owner.Role.ADMIN)
+    public ResponseEntity<GroupPaymentResponse> update(@PathVariable String groupId,
+                                                       @PathVariable String groupPaymentRef,
+                                                       @Valid @RequestBody CreatePaymentRequest request) {
+        return paymentService.updateGroupPayment(groupId, groupPaymentRef, request)
+                .map(ResponseEntity::ok)
+                .orElseGet(() -> ResponseEntity.notFound().build());
+    }
+
+    /**
      * Reverses a bill-level payment in full, by the ref the POST returned --
      * every slice it was split into, put back on the booking it came off.
      * Keyed on the ref rather than a payment id precisely because one entered

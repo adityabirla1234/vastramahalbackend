@@ -81,14 +81,28 @@ public class AuditLogService {
     }
 
     /**
-     * Booking History "Remove item" action -- the row is never hard-deleted
-     * (see BookingService.removeBookingItem), just cancelled with its amounts
-     * zeroed, so this reads more like an update than a deletion: before is
-     * the bill as it stood with the item still on it, after is the same row
-     * now cancelled and worth nothing towards the bill.
+     * No longer called: removing an item now hard-deletes it (see
+     * BookingService.deleteBookingPermanently and {@link #purgeBookingHistory}),
+     * so no audit row is written for it. Kept only for any old caller.
      */
     public void recordBookingItemRemoved(Map<String, Object> before, Booking after) {
         write("BOOKING_ITEM_REMOVED", "BOOKING", after.getId(), before, snapshotBooking(after));
+    }
+
+    /**
+     * A cancelled booking row is hard-deleted (BookingService.
+     * deleteBookingPermanently), so nothing about it may remain: every audit
+     * row for the booking and for each of its payments is removed, and no
+     * new "removed" row is written (it would only point at a booking that no
+     * longer exists). Other devices are still told to refresh -- through the
+     * normal post-commit push -- so they drop the row from their own caches.
+     */
+    public void purgeBookingHistory(Long bookingId, List<Long> paymentIds) {
+        auditLogRepository.deleteByEntityTypeAndEntityId("BOOKING", bookingId);
+        for (Long paymentId : paymentIds) {
+            auditLogRepository.deleteByEntityTypeAndEntityId("PAYMENT", paymentId);
+        }
+        schedulePushSync("BOOKING_DELETED", "BOOKING", bookingId, currentActorIdOrNull());
     }
 
     /**
@@ -144,6 +158,16 @@ public class AuditLogService {
         write("PAYMENT_CREATED", "PAYMENT", payment.getId(), null, snapshotPayment(payment));
     }
 
+    /** before/after are {@link #snapshotPayment} maps; take "before" ahead of mutating the row. */
+    public void recordPaymentUpdated(Map<String, Object> before, Payment after) {
+        write("PAYMENT_UPDATED", "PAYMENT", after.getId(), before, snapshotPayment(after));
+    }
+
+    /** Snapshot taken before a payment is edited -- the entity is mutated in place. */
+    public Map<String, Object> snapshotPaymentForUpdate(Payment payment) {
+        return snapshotPayment(payment);
+    }
+
     public void recordPaymentDeleted(Payment payment) {
         // before=the payment as it existed right before removal; after=null,
         // since there's nothing left once deletePayment removes the row.
@@ -193,6 +217,7 @@ public class AuditLogService {
         m.put("depositReturnReason", booking.getDepositReturnReason());
         m.put("settlementStatus", booking.getSettlementStatus());
         m.put("advanceAmount", booking.getAdvanceAmount());
+        m.put("advancePaymentMethod", booking.getAdvancePaymentMethod());
         m.put("balanceAmount", booking.getBalanceAmount());
         m.put("status", booking.getStatus());
         m.put("notes", booking.getNotes());

@@ -102,9 +102,39 @@ public class BookingService {
                 .collect(Collectors.toMap(
                         ItemImageRepository.PrimaryImageProjection::getItemId,
                         p -> objectStorageService.publicUrl(p.getImageKey())));
+        Map<Long, String> accessoryImageUrls = accessoryImageUrls(bookings);
         return bookings.stream()
-                .map(b -> BookingResponse.from(b, imageUrlByItemId.get(b.getItem().getId())))
+                .map(b -> BookingResponse.from(b, imageUrlByItemId.get(b.getItem().getId()), accessoryImageUrls))
                 .toList();
+    }
+
+    /**
+     * Primary-photo URLs for every accessory attached to [bookings], keyed
+     * by the accessory's inventory itemId -- one query for the whole set.
+     * Accessories whose inventory item has no photo (or was deleted) are
+     * simply absent from the map.
+     */
+    private Map<Long, String> accessoryImageUrls(List<Booking> bookings) {
+        List<Long> accessoryItemIds = bookings.stream()
+                .filter(b -> b.getAccessories() != null)
+                .flatMap(b -> b.getAccessories().stream())
+                .map(BookingAccessory::getItemId)
+                .filter(java.util.Objects::nonNull)
+                .distinct()
+                .toList();
+        if (accessoryItemIds.isEmpty()) {
+            return Map.of();
+        }
+        return itemImageRepository.findPrimaryImageKeysForItems(accessoryItemIds).stream()
+                .collect(Collectors.toMap(
+                        ItemImageRepository.PrimaryImageProjection::getItemId,
+                        p -> objectStorageService.publicUrl(p.getImageKey())));
+    }
+
+    /** Single-booking response with the item's photo and its accessories' photos resolved. */
+    private BookingResponse toResponse(Booking booking) {
+        return BookingResponse.from(booking, resolveItemImageUrl(booking.getItem().getId()),
+                accessoryImageUrls(List.of(booking)));
     }
 
     /**
@@ -146,7 +176,7 @@ public class BookingService {
         var existing = bookingRepository.findByIdempotencyKey(req.getIdempotencyKey());
         if (existing.isPresent()) {
             Booking existingBooking = existing.get();
-            return BookingResponse.from(existingBooking, resolveItemImageUrl(existingBooking.getItem().getId()));
+            return toResponse(existingBooking);
         }
 
         if (req.getReturnDate().isBefore(req.getPickupDate())) {
@@ -219,7 +249,7 @@ public class BookingService {
         // a slow Telegram API can never block or fail the booking transaction).
         auditLogService.recordBookingCreated(saved);
 
-        return BookingResponse.from(saved, resolveItemImageUrl(saved.getItem().getId()));
+        return toResponse(saved);
     }
 
     /**
@@ -342,6 +372,16 @@ public class BookingService {
                                 " from " + previousStatus + " to " + target);
                     }
 
+                    // Cancelling a booking deletes it for good -- the row,
+                    // its payments, accessories and audit history all go,
+                    // so a cancelled bill shows up nowhere in the app. The
+                    // response still carries status CANCELLED so the caller
+                    // knows what happened; the row itself no longer exists.
+                    if (target == Booking.BookingStatus.CANCELLED) {
+                        booking.setStatus(Booking.BookingStatus.CANCELLED);
+                        return deleteBookingPermanently(booking);
+                    }
+
                     // Section 3.7 redesign, step 5: the security deposit is
                     // collected right here, at pickup time -- never at
                     // creation. The app must prompt for it before calling
@@ -419,7 +459,7 @@ public class BookingService {
                     booking.setStatus(target);
                     Booking saved = bookingRepository.save(booking);
                     auditLogService.recordBookingStatusChanged(saved, previousStatus);
-                    return BookingResponse.from(saved, resolveItemImageUrl(saved.getItem().getId()));
+                    return toResponse(saved);
                 });
     }
 
@@ -482,7 +522,7 @@ public class BookingService {
                 auditLogService.recordBillSettled(sibling);
             }
 
-            return BookingResponse.from(saved, resolveItemImageUrl(saved.getItem().getId()));
+            return toResponse(saved);
         });
     }
 
@@ -549,8 +589,15 @@ public class BookingService {
 
             assertVersion(booking, req.getVersion());
 
-            // Read before any field is mutated: a query after mutation would auto-flush
-            // a half-edited row and bump its version twice.
+            if ((req.getDepositAmount() != null || req.getDepositPaymentMethod() != null)
+                    && booking.getStatus() != Booking.BookingStatus.PICKED_UP) {
+                throw new IllegalStateException(
+                        "The security deposit can only be edited once the item has been picked up");
+            }
+
+            // ---- Everything that QUERIES is done before any field is mutated: a
+            // query after mutation would auto-flush a half-edited row and bump
+            // its version twice.
             BigDecimal paidSum = paymentRepository.sumAmountByBookingId(booking.getId());
             BigDecimal alreadyPaid = paidSum == null ? BigDecimal.ZERO : paidSum;
 
@@ -558,8 +605,49 @@ public class BookingService {
             // see AuditLogService.recordBookingItemUpdated's Javadoc.
             java.util.Map<String, Object> before = auditLogService.snapshotBooking(booking);
 
-            if (req.getItemId() != null && !req.getItemId().equals(booking.getItem().getId())) {
-                exchangeItem(booking, req.getItemId());
+            // Bill No is a bill-level field: every sibling row has to carry the same
+            // value, so they are loaded (and snapshotted) now, while nothing is dirty.
+            String newBillNumber = req.getBillNumber() == null ? null : normalizeBillNumber(req.getBillNumber());
+            boolean billNumberChanged = req.getBillNumber() != null
+                    && !java.util.Objects.equals(newBillNumber, booking.getBillNumber());
+            List<Booking> siblings = List.of();
+            java.util.Map<Long, java.util.Map<String, Object>> siblingBefore = new java.util.HashMap<>();
+            if (billNumberChanged && booking.getGroupId() != null) {
+                siblings = bookingRepository.findByGroupIdWithDetails(booking.getGroupId()).stream()
+                        .filter(b -> !b.getId().equals(booking.getId()))
+                        .toList();
+                for (Booking sibling : siblings) {
+                    siblingBefore.put(sibling.getId(), auditLogService.snapshotBooking(sibling));
+                }
+            }
+
+            // ---- Dates (and the availability check they need), still pre-mutation.
+            LocalDate newPickup = req.getPickupDate() != null ? req.getPickupDate() : booking.getPickupDate();
+            LocalDate newReturn = req.getReturnDate() != null ? req.getReturnDate() : booking.getReturnDate();
+            LocalDate newEvent = Boolean.TRUE.equals(req.getClearEventDate())
+                    ? null
+                    : (req.getEventDate() != null ? req.getEventDate() : booking.getEventDate());
+            if (newReturn.isBefore(newPickup)) {
+                throw new IllegalArgumentException("Return date cannot be before the pickup date");
+            }
+            boolean datesChanged = !newPickup.equals(booking.getPickupDate())
+                    || !newReturn.equals(booking.getReturnDate());
+            boolean itemChanged = req.getItemId() != null && !req.getItemId().equals(booking.getItem().getId());
+
+            if (itemChanged) {
+                exchangeItem(booking, req.getItemId(), newPickup, newReturn);
+            } else if (datesChanged) {
+                assertItemFreeForDates(booking, newPickup, newReturn);
+            }
+            booking.setPickupDate(newPickup);
+            booking.setReturnDate(newReturn);
+            booking.setEventDate(newEvent);
+
+            if (billNumberChanged) {
+                booking.setBillNumber(newBillNumber);
+                for (Booking sibling : siblings) {
+                    sibling.setBillNumber(newBillNumber);
+                }
             }
 
             if (req.getRentalAmount() != null) {
@@ -567,6 +655,22 @@ public class BookingService {
             }
             if (req.getAdvanceAmount() != null) {
                 booking.setAdvanceAmount(req.getAdvanceAmount());
+            }
+            if (req.getAdvancePaymentMethod() != null) {
+                booking.setAdvancePaymentMethod(blankToNull(req.getAdvancePaymentMethod()));
+            }
+            if (booking.getAdvanceAmount() == null || booking.getAdvanceAmount().signum() <= 0) {
+                // No advance, so no "how was the advance paid".
+                booking.setAdvancePaymentMethod(null);
+            }
+            if (req.getDepositAmount() != null) {
+                booking.setDepositAmount(req.getDepositAmount());
+            }
+            if (req.getDepositPaymentMethod() != null) {
+                booking.setDepositPaymentMethod(blankToNull(req.getDepositPaymentMethod()));
+            }
+            if (booking.getDepositAmount() == null || booking.getDepositAmount().signum() <= 0) {
+                booking.setDepositPaymentMethod(null);
             }
             if (req.getNotes() != null) {
                 booking.setNotes(req.getNotes());
@@ -590,8 +694,8 @@ public class BookingService {
             }
 
             if (req.getRentalAmount() != null || req.getAdvanceAmount() != null) {
-                // Only when the amounts are actually being changed, so an unrelated
-                // edit (fitting work, notes) is never blocked by old data.
+                // Only when the amounts are actually being changed, so an
+                // unrelated edit (fitting work, notes) is never blocked by old data.
                 requireAdvanceWithinRental(booking.getAdvanceAmount(), booking.getRentalAmount());
             }
             BigDecimal newBalance = booking.getRentalAmount()
@@ -606,8 +710,37 @@ public class BookingService {
 
             Booking saved = bookingRepository.save(booking);
             auditLogService.recordBookingItemUpdated(before, saved);
-            return BookingResponse.from(saved, resolveItemImageUrl(saved.getItem().getId()));
+            for (Booking sibling : siblings) {
+                Booking savedSibling = bookingRepository.save(sibling);
+                auditLogService.recordBookingItemUpdated(siblingBefore.get(sibling.getId()), savedSibling);
+            }
+            return toResponse(saved);
         });
+    }
+
+    /** Trimmed; blank becomes null. */
+    private static String blankToNull(String raw) {
+        if (raw == null) {
+            return null;
+        }
+        String trimmed = raw.trim();
+        return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    /**
+     * A date change on the SAME item: same lock-then-check the booking
+     * creation and exchange paths use, excluding this row's own id so it
+     * never conflicts with itself.
+     */
+    private void assertItemFreeForDates(Booking booking, LocalDate pickup, LocalDate returnDate) {
+        Item item = itemRepository.findByIdForUpdate(booking.getItem().getId())
+                .orElseThrow(() -> new IllegalArgumentException("Item not found: " + booking.getItem().getId()));
+        List<Booking> conflicts = bookingRepository.findOverlapping(item.getId(), pickup, returnDate, booking.getId());
+        if (!conflicts.isEmpty()) {
+            throw new BookingConflictException(
+                    "Item " + item.getItemCode() + " is not available for " + pickup + " to " + returnDate
+                            + " (conflicts with booking " + conflicts.get(0).getBookingNumber() + ")");
+        }
     }
 
     /**
@@ -622,7 +755,7 @@ public class BookingService {
      * transaction, excluding [booking]'s own id so it never conflicts with
      * itself.
      */
-    private void exchangeItem(Booking booking, Long newItemId) {
+    private void exchangeItem(Booking booking, Long newItemId, LocalDate pickup, LocalDate returnDate) {
         if (booking.getStatus() != Booking.BookingStatus.PENDING
                 && booking.getStatus() != Booking.BookingStatus.CONFIRMED) {
             throw new IllegalStateException(
@@ -638,11 +771,11 @@ public class BookingService {
         }
 
         List<Booking> conflicts = bookingRepository.findOverlapping(
-                newItem.getId(), booking.getPickupDate(), booking.getReturnDate(), booking.getId());
+                newItem.getId(), pickup, returnDate, booking.getId());
         if (!conflicts.isEmpty()) {
             throw new BookingConflictException(
                     "Item " + newItem.getItemCode() + " is not available for " +
-                    booking.getPickupDate() + " to " + booking.getReturnDate() +
+                    pickup + " to " + returnDate +
                     " (conflicts with booking " + conflicts.get(0).getBookingNumber() + ")");
         }
 
@@ -650,20 +783,40 @@ public class BookingService {
     }
 
     /**
-     * Booking History "Remove item" action: takes ONE item row off a bill.
-     * Never a hard delete -- the row is transitioned to CANCELLED (freeing
-     * its dates on the item's calendar, same as any other cancellation) and
-     * its billable amounts are zeroed, so it drops out of every bill total
-     * that folds over the group's rows (BillTotalsSection on the app side,
-     * BookingService.getGroupBookings's callers) without erasing the fact
-     * that it was once booked -- the audit log and the row itself (still
-     * visible, badged CANCELLED, in the bill's item list) keep that history.
+     * The one place a cancelled booking row actually disappears. Removes, in
+     * dependency order: the row's payments (the payments table's FK has no
+     * ON DELETE CASCADE when Hibernate generates it), the booking itself
+     * (its accessories go with it via cascade), and every audit_logs row
+     * about the booking or its payments. Runs inside the caller's
+     * transaction, so either all of it happens or none of it.
      *
-     * For a standalone booking (no groupId -- a "booking per row"), this is
-     * simply the whole booking going away: there's only ever the one row,
-     * so removing "an item from the bill" and cancelling the bill outright
-     * are the same action, and the existing CANCELLED semantics already
-     * cover it correctly.
+     * Returns the row as it stood just before deletion (status CANCELLED,
+     * set by the caller) -- built first because it touches lazy
+     * associations that are gone afterwards.
+     */
+    private BookingResponse deleteBookingPermanently(Booking booking) {
+        BookingResponse snapshot = toResponse(booking);
+
+        List<com.rentalshop.backend.entity.Payment> payments =
+                paymentRepository.findByBookingIdOrderByPaymentDateAscCreatedAtAsc(booking.getId());
+        List<Long> paymentIds = payments.stream().map(com.rentalshop.backend.entity.Payment::getId).toList();
+
+        paymentRepository.deleteAll(payments);
+        bookingRepository.delete(booking);
+        auditLogService.purgeBookingHistory(booking.getId(), paymentIds);
+        return snapshot;
+    }
+
+    /**
+     * Booking History "Remove item" action: takes ONE item row off a bill.
+     * The row is deleted permanently (see deleteBookingPermanently) -- its
+     * dates free up on the item's calendar, it drops out of every bill
+     * total, and no trace of it (row, payments, audit history) is kept.
+     *
+     * For a standalone booking (no groupId -- a "booking per row"), or the
+     * last remaining item of a bill, this is the whole bill going away:
+     * removing "an item from the bill" and cancelling the bill outright are
+     * the same action.
      *
      * Refused once the row is already closed out (RETURNED/CANCELLED,
      * including a double-tap of this same action) or PICKED_UP -- an item
@@ -685,16 +838,8 @@ public class BookingService {
 
             assertVersion(booking, version);
 
-            java.util.Map<String, Object> before = auditLogService.snapshotBooking(booking);
-
             booking.setStatus(Booking.BookingStatus.CANCELLED);
-            booking.setRentalAmount(BigDecimal.ZERO);
-            booking.setAdvanceAmount(BigDecimal.ZERO);
-            booking.setBalanceAmount(BigDecimal.ZERO);
-
-            Booking saved = bookingRepository.save(booking);
-            auditLogService.recordBookingItemRemoved(before, saved);
-            return BookingResponse.from(saved, resolveItemImageUrl(saved.getItem().getId()));
+            return deleteBookingPermanently(booking);
         });
     }
 
@@ -812,7 +957,7 @@ public class BookingService {
     @Transactional(readOnly = true)
     public Optional<BookingResponse> getBooking(Long id) {
         return bookingRepository.findByIdWithDetails(id)
-                .map(b -> BookingResponse.from(b, resolveItemImageUrl(b.getItem().getId())));
+                .map(b -> toResponse(b));
     }
 
     /**

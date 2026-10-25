@@ -234,17 +234,17 @@ public class BookingController {
 
     /**
      * Booking History "Remove item" action: takes this one row off its
-     * bill (see BookingService.removeBookingItem for what that actually
-     * does -- never a hard delete). `version` travels as a query param
-     * since a DELETE carries no conventional body; the app reads it off
-     * the row exactly like it already does for PATCH .../status.
+     * bill by deleting it permanently (see BookingService.removeBookingItem).
+     * `version` travels as a query param since a DELETE carries no
+     * conventional body; the app reads it off the row exactly like it
+     * already does for PATCH .../status.
      *
-     * 200 with the now-cancelled row (so the app can show it struck
-     * through in the bill's item list rather than having to refetch),
-     * 404 if the id doesn't exist, 409 INVALID_STATE if the row can't be
-     * removed in its current status (already closed out, or already
-     * picked up), or 409 STALE_WRITE if `version` doesn't match.
-     * Admin-only, same posture as every other booking write.
+     * 200 with the row as it stood just before deletion (status CANCELLED;
+     * the row no longer exists, so the app drops it rather than showing
+     * it), 404 if the id doesn't exist, 409 INVALID_STATE if the row can't
+     * be removed in its current status (already picked up or returned), or
+     * 409 STALE_WRITE if `version` doesn't match. Admin-only, same posture
+     * as every other booking write.
      */
     @DeleteMapping("/{id}")
     @RequireRole(Owner.Role.ADMIN)

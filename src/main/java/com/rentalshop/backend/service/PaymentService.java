@@ -151,7 +151,17 @@ public class PaymentService {
                     "Payment amount " + req.getAmount() + " exceeds the bill's outstanding balance " + outstanding);
         }
 
-        String ref = UUID.randomUUID().toString();
+        return Optional.of(allocateGroupPayment(groupId, bookings, UUID.randomUUID().toString(), req));
+    }
+
+    /**
+     * The greedy oldest-first split shared by recordGroupPayment and
+     * updateGroupPayment: writes one slice per booking that still owes
+     * something, all tagged with [ref], and returns the response. The caller
+     * has already checked the amount against the bill's outstanding balance.
+     */
+    private GroupPaymentResponse allocateGroupPayment(String groupId, List<Booking> bookings, String ref,
+                                                      CreatePaymentRequest req) {
         BigDecimal remaining = req.getAmount();
         List<PaymentResponse> allocations = new ArrayList<>();
 
@@ -161,9 +171,6 @@ public class PaymentService {
             }
             BigDecimal due = booking.getBalanceAmount();
             if (due.signum() <= 0) {
-                // Already paid off (or settled at return time) -- skipped
-                // entirely rather than written a zero-amount row, which
-                // would only clutter the bill's payment history.
                 continue;
             }
 
@@ -190,7 +197,7 @@ public class PaymentService {
                 .map(Booking::getBalanceAmount)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
 
-        return Optional.of(GroupPaymentResponse.builder()
+        return GroupPaymentResponse.builder()
                 .groupId(groupId)
                 .groupPaymentRef(ref)
                 .amount(req.getAmount())
@@ -199,7 +206,101 @@ public class PaymentService {
                 .notes(req.getNotes())
                 .allocations(allocations)
                 .groupBalanceAfter(balanceAfter)
-                .build());
+                .build();
+    }
+
+    /**
+     * Edits a payment recorded against a single (non multi-item) booking:
+     * amount, date, method and notes. The balance is re-derived from the
+     * difference so it can never drift -- raising the amount takes more off
+     * the balance, lowering it puts the difference back, and an edit that
+     * would push the balance below zero is rejected (400), same rule as
+     * recording a payment. A slice of a bill-level payment is edited through
+     * the bill instead (409), and a settled booking is frozen (409), exactly
+     * like deletePayment.
+     */
+    @Transactional
+    public Optional<PaymentResponse> updatePayment(Long bookingId, Long paymentId, CreatePaymentRequest req) {
+        return paymentRepository.findById(paymentId)
+                .filter(p -> p.getBooking().getId().equals(bookingId))
+                .map(payment -> {
+                    if (payment.getGroupPaymentRef() != null) {
+                        throw new IllegalStateException(
+                                "This payment was recorded against the whole bill. Edit it from the bill's "
+                                + "payment history, which re-splits it across the items.");
+                    }
+                    Booking booking = payment.getBooking();
+                    requireNotSettled(booking);
+
+                    BigDecimal newBalance = booking.getBalanceAmount()
+                            .add(payment.getAmount())
+                            .subtract(req.getAmount());
+                    if (newBalance.signum() < 0) {
+                        throw new IllegalArgumentException(
+                                "Payment amount " + req.getAmount() + " exceeds the outstanding balance of "
+                                + booking.getBalanceAmount().add(payment.getAmount())
+                                + " for booking " + booking.getBookingNumber());
+                    }
+
+                    java.util.Map<String, Object> before = auditLogService.snapshotPaymentForUpdate(payment);
+                    payment.setAmount(req.getAmount());
+                    payment.setPaymentDate(req.getPaymentDate());
+                    payment.setMethod(req.getMethod());
+                    payment.setNotes(req.getNotes());
+                    Payment saved = paymentRepository.save(payment);
+
+                    booking.setBalanceAmount(newBalance);
+                    bookingRepository.save(booking);
+
+                    auditLogService.recordPaymentUpdated(before, saved);
+                    return PaymentResponse.from(saved);
+                });
+    }
+
+    /**
+     * Edits a bill-level payment (amount/date/method/notes) by its ref. The
+     * old slices are reversed in full and the new amount is split afresh,
+     * oldest item first, under the SAME ref -- so the bill history still
+     * shows it as the one payment it is, and the balances end up exactly as
+     * if the corrected amount had been entered in the first place. All or
+     * nothing: an amount above what the bill can take, or a settled bill,
+     * fails the whole call and changes nothing.
+     */
+    @Transactional
+    public Optional<GroupPaymentResponse> updateGroupPayment(String groupId, String groupPaymentRef,
+                                                             CreatePaymentRequest req) {
+        List<Payment> slices = paymentRepository.findByGroupPaymentRef(groupPaymentRef).stream()
+                .filter(p -> groupId.equals(p.getBooking().getGroupId()))
+                .toList();
+        if (slices.isEmpty()) {
+            return Optional.empty();
+        }
+        for (Payment slice : slices) {
+            requireNotSettled(slice.getBooking());
+        }
+
+        List<Booking> bookings = bookingRepository.findByGroupIdWithDetails(groupId);
+        BigDecimal reversed = slices.stream().map(Payment::getAmount).reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal outstandingWithoutThisPayment = bookings.stream()
+                .map(Booking::getBalanceAmount)
+                .reduce(BigDecimal.ZERO, BigDecimal::add)
+                .add(reversed);
+        if (req.getAmount().compareTo(outstandingWithoutThisPayment) > 0) {
+            throw new IllegalArgumentException(
+                    "Payment amount " + req.getAmount() + " exceeds the bill's outstanding balance "
+                    + outstandingWithoutThisPayment);
+        }
+
+        for (Payment slice : slices) {
+            Booking booking = slice.getBooking();
+            booking.setBalanceAmount(booking.getBalanceAmount().add(slice.getAmount()));
+            bookingRepository.save(booking);
+            paymentRepository.delete(slice);
+            auditLogService.recordPaymentDeleted(slice);
+        }
+        paymentRepository.flush();
+
+        return Optional.of(allocateGroupPayment(groupId, bookings, groupPaymentRef, req));
     }
 
     /**

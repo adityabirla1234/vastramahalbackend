@@ -8,6 +8,7 @@ import lombok.Getter;
 import lombok.Setter;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.List;
 
 /**
@@ -79,4 +80,45 @@ public class UpdateBookingItemRequest {
      */
     @Valid
     private List<BookingAccessoryRequest> accessories;
+
+    /**
+     * Bill No -- a BILL-level field, so a non-null value is applied to every
+     * row sharing this row's groupId, not just this one. Null leaves it
+     * alone; a blank string clears it.
+     */
+    @Size(max = 40)
+    private String billNumber;
+
+    /**
+     * How the advance was paid ("Cash" / "UPI" / "Card"). Null leaves it
+     * alone, blank clears it. Always cleared server-side when the advance
+     * ends up zero.
+     */
+    @Size(max = 40)
+    private String advancePaymentMethod;
+
+    /**
+     * Date edits. Null leaves the date alone. Changing either pickup or
+     * return re-runs the same availability check an exchange does, so a
+     * date change can never double-book the item (409 BOOKING_CONFLICT).
+     * [clearEventDate] = true removes the event date (a LocalDate cannot be
+     * "blank"); it wins over [eventDate].
+     */
+    private LocalDate pickupDate;
+    private LocalDate eventDate;
+    private LocalDate returnDate;
+    private Boolean clearEventDate;
+
+    /**
+     * Security deposit correction -- only meaningful once the deposit was
+     * actually taken, i.e. while the row is PICKED_UP (409 INVALID_STATE
+     * otherwise). Never touches balanceAmount: the deposit is not part of
+     * the bill.
+     */
+    @DecimalMin("0.0")
+    private BigDecimal depositAmount;
+
+    /** Null leaves it alone, blank clears it; cleared when the deposit ends up zero. */
+    @Size(max = 40)
+    private String depositPaymentMethod;
 }

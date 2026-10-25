@@ -12,4 +12,11 @@ public interface AuditLogRepository extends JpaRepository<AuditLog, Long> {
 
     /** Recent-activity feed for a future System Health (Admin) screen -- shop-wide, not scoped to one entity. */
     List<AuditLog> findTop100ByOrderByCreatedAtDesc();
+
+    /**
+     * Wipes every audit row about one entity -- used when a booking is
+     * permanently deleted (BookingService.deleteBookingPermanently) so its
+     * history doesn't linger on the System Health screen.
+     */
+    void deleteByEntityTypeAndEntityId(String entityType, Long entityId);
 }

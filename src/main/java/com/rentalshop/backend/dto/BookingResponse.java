@@ -106,6 +106,11 @@ public class BookingResponse {
 
     /** [itemImageUrl] is resolved by the caller (BookingService) -- this DTO has no repository access of its own. */
     public static BookingResponse from(Booking b, String itemImageUrl) {
+        return from(b, itemImageUrl, java.util.Map.of());
+    }
+
+    /** [accessoryImageUrls] maps an accessory's inventory itemId to its primary photo URL; missing = no photo. */
+    public static BookingResponse from(Booking b, String itemImageUrl, java.util.Map<Long, String> accessoryImageUrls) {
         return BookingResponse.builder()
                 .id(b.getId())
                 .bookingNumber(b.getBookingNumber())
@@ -143,7 +148,7 @@ public class BookingResponse {
                 // list endpoint stays one extra query for the whole page
                 // rather than one per booking.
                 .accessories(b.getAccessories() == null ? List.of() : b.getAccessories().stream()
-                        .map(BookingAccessoryResponse::from)
+                        .map(a -> BookingAccessoryResponse.from(a, accessoryImageUrls.get(a.getItemId())))
                         .toList())
                 .build();
     }

@@ -29,8 +29,21 @@ public class BookingAccessoryResponse {
     /** Ready-to-display bucket name ("Jewellery"), so the app doesn't re-map the enum itself. */
     private String categoryLabel;
 
+    /**
+     * Public URL of the accessory's primary photo, read live from inventory
+     * by itemId (the snapshot fields above deliberately don't include one).
+     * Null when the accessory has no photo, or its inventory item no longer
+     * exists. Used for the photo links in the WhatsApp bill.
+     */
+    private String imageUrl;
+
     public static BookingAccessoryResponse from(BookingAccessory accessory) {
+        return from(accessory, null);
+    }
+
+    public static BookingAccessoryResponse from(BookingAccessory accessory, String imageUrl) {
         return BookingAccessoryResponse.builder()
+                .imageUrl(imageUrl)
                 .id(accessory.getId())
                 .itemId(accessory.getItemId())
                 .itemCode(accessory.getItemCode())

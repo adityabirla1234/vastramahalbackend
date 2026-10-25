@@ -45,6 +45,23 @@ public class PaymentController {
                 .orElseGet(() -> ResponseEntity.notFound().build());
     }
 
+    /**
+     * Edits a recorded payment (amount, date, method, notes); the booking's
+     * balance is re-derived from the difference. 404 if the payment isn't on
+     * this booking, 400 if the new amount exceeds what the booking can take,
+     * 409 if the payment belongs to a bill-level payment or the booking is
+     * settled.
+     */
+    @PutMapping("/{paymentId}")
+    @RequireRole(Owner.Role.ADMIN)
+    public ResponseEntity<PaymentResponse> update(@PathVariable Long bookingId,
+                                                  @PathVariable Long paymentId,
+                                                  @Valid @RequestBody CreatePaymentRequest request) {
+        return paymentService.updatePayment(bookingId, paymentId, request)
+                .map(ResponseEntity::ok)
+                .orElseGet(() -> ResponseEntity.notFound().build());
+    }
+
     /** Corrects a mis-entered payment; restores its amount back onto the booking's balance. */
     @DeleteMapping("/{paymentId}")
     @RequireRole(Owner.Role.ADMIN)
