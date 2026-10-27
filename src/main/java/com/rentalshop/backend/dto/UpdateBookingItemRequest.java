@@ -9,6 +9,7 @@ import lombok.Setter;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.LocalTime;
 import java.util.List;
 
 /**
@@ -108,6 +109,14 @@ public class UpdateBookingItemRequest {
     private LocalDate eventDate;
     private LocalDate returnDate;
     private Boolean clearEventDate;
+
+    /**
+     * Time-of-day edits ("HH:mm"). Null leaves the time alone. Changing a date OR a
+     * time re-runs the availability check, so moving a return from 13:30 to 15:00
+     * can't swallow a booking that starts at 14:00 (409 BOOKING_CONFLICT).
+     */
+    private LocalTime pickupTime;
+    private LocalTime returnTime;
 
     /**
      * Security deposit correction -- only meaningful once the deposit was

@@ -70,6 +70,8 @@ CREATE TABLE IF NOT EXISTS bookings (
     pickup_date     DATE                NOT NULL,
     event_date      DATE,
     return_date     DATE                NOT NULL,
+    pickup_time     TIME                DEFAULT '00:00:00', -- time of day for pickup_date. Default = whole day blocked (pre-time rows).
+    return_time     TIME                DEFAULT '23:59:00', -- time of day for return_date, inclusive: item is bookable again the next minute.
     rental_amount   DECIMAL(10,2)       NOT NULL DEFAULT 0,
     deposit_amount  DECIMAL(10,2)       NOT NULL DEFAULT 0,
     deposit_payment_method VARCHAR(40), -- Cash|UPI|Card; how the security deposit was paid, entered at pickup.

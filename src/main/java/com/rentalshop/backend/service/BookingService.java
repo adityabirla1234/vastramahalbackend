@@ -31,6 +31,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
@@ -179,8 +181,12 @@ public class BookingService {
             return toResponse(existingBooking);
         }
 
-        if (req.getReturnDate().isBefore(req.getPickupDate())) {
-            throw new IllegalArgumentException("returnDate cannot be before pickupDate");
+        LocalTime pickupTime = req.getPickupTime() != null ? req.getPickupTime() : Booking.DEFAULT_PICKUP_TIME;
+        LocalTime returnTime = req.getReturnTime() != null ? req.getReturnTime() : Booking.DEFAULT_RETURN_TIME;
+        LocalDateTime pickupAt = LocalDateTime.of(req.getPickupDate(), pickupTime);
+        LocalDateTime returnAt = LocalDateTime.of(req.getReturnDate(), returnTime);
+        if (returnAt.isBefore(pickupAt)) {
+            throw new IllegalArgumentException("Return date/time cannot be before the pickup date/time");
         }
         requireAdvanceWithinRental(req.getAdvanceAmount(), req.getRentalAmount());
 
@@ -202,12 +208,12 @@ public class BookingService {
         // committed a booking for this item, because that transaction must
         // have released the lock (via commit) before we acquired it.
         List<Booking> conflicts = bookingRepository.findOverlapping(
-                item.getId(), req.getPickupDate(), req.getReturnDate(), -1L);
+                item.getId(), pickupAt, returnAt, -1L);
 
         if (!conflicts.isEmpty()) {
             throw new BookingConflictException(
                     "Item " + item.getItemCode() + " is not available for " +
-                    req.getPickupDate() + " to " + req.getReturnDate() +
+                    formatWindow(pickupAt, returnAt) +
                     " (conflicts with booking " + conflicts.get(0).getBookingNumber() + ")");
         }
 
@@ -218,6 +224,8 @@ public class BookingService {
         booking.setPickupDate(req.getPickupDate());
         booking.setEventDate(req.getEventDate());
         booking.setReturnDate(req.getReturnDate());
+        booking.setPickupTime(pickupTime);
+        booking.setReturnTime(returnTime);
         booking.setRentalAmount(req.getRentalAmount());
         // depositAmount deliberately left unset here -- it defaults to ZERO
         // on the entity and is only ever set later, at pickup time (see
@@ -627,20 +635,26 @@ public class BookingService {
             LocalDate newEvent = Boolean.TRUE.equals(req.getClearEventDate())
                     ? null
                     : (req.getEventDate() != null ? req.getEventDate() : booking.getEventDate());
-            if (newReturn.isBefore(newPickup)) {
-                throw new IllegalArgumentException("Return date cannot be before the pickup date");
+            LocalTime newPickupTime = req.getPickupTime() != null ? req.getPickupTime() : booking.pickupAt().toLocalTime();
+            LocalTime newReturnTime = req.getReturnTime() != null ? req.getReturnTime() : booking.returnAt().toLocalTime();
+            LocalDateTime newPickupAt = LocalDateTime.of(newPickup, newPickupTime);
+            LocalDateTime newReturnAt = LocalDateTime.of(newReturn, newReturnTime);
+            if (newReturnAt.isBefore(newPickupAt)) {
+                throw new IllegalArgumentException("Return date/time cannot be before the pickup date/time");
             }
-            boolean datesChanged = !newPickup.equals(booking.getPickupDate())
-                    || !newReturn.equals(booking.getReturnDate());
+            boolean datesChanged = !newPickupAt.equals(booking.pickupAt())
+                    || !newReturnAt.equals(booking.returnAt());
             boolean itemChanged = req.getItemId() != null && !req.getItemId().equals(booking.getItem().getId());
 
             if (itemChanged) {
-                exchangeItem(booking, req.getItemId(), newPickup, newReturn);
+                exchangeItem(booking, req.getItemId(), newPickupAt, newReturnAt);
             } else if (datesChanged) {
-                assertItemFreeForDates(booking, newPickup, newReturn);
+                assertItemFreeForDates(booking, newPickupAt, newReturnAt);
             }
             booking.setPickupDate(newPickup);
             booking.setReturnDate(newReturn);
+            booking.setPickupTime(newPickupTime);
+            booking.setReturnTime(newReturnTime);
             booking.setEventDate(newEvent);
 
             if (billNumberChanged) {
@@ -732,13 +746,13 @@ public class BookingService {
      * creation and exchange paths use, excluding this row's own id so it
      * never conflicts with itself.
      */
-    private void assertItemFreeForDates(Booking booking, LocalDate pickup, LocalDate returnDate) {
+    private void assertItemFreeForDates(Booking booking, LocalDateTime pickup, LocalDateTime returnDate) {
         Item item = itemRepository.findByIdForUpdate(booking.getItem().getId())
                 .orElseThrow(() -> new IllegalArgumentException("Item not found: " + booking.getItem().getId()));
         List<Booking> conflicts = bookingRepository.findOverlapping(item.getId(), pickup, returnDate, booking.getId());
         if (!conflicts.isEmpty()) {
             throw new BookingConflictException(
-                    "Item " + item.getItemCode() + " is not available for " + pickup + " to " + returnDate
+                    "Item " + item.getItemCode() + " is not available for " + formatWindow(pickup, returnDate)
                             + " (conflicts with booking " + conflicts.get(0).getBookingNumber() + ")");
         }
     }
@@ -755,7 +769,7 @@ public class BookingService {
      * transaction, excluding [booking]'s own id so it never conflicts with
      * itself.
      */
-    private void exchangeItem(Booking booking, Long newItemId, LocalDate pickup, LocalDate returnDate) {
+    private void exchangeItem(Booking booking, Long newItemId, LocalDateTime pickup, LocalDateTime returnDate) {
         if (booking.getStatus() != Booking.BookingStatus.PENDING
                 && booking.getStatus() != Booking.BookingStatus.CONFIRMED) {
             throw new IllegalStateException(
@@ -775,7 +789,7 @@ public class BookingService {
         if (!conflicts.isEmpty()) {
             throw new BookingConflictException(
                     "Item " + newItem.getItemCode() + " is not available for " +
-                    pickup + " to " + returnDate +
+                    formatWindow(pickup, returnDate) +
                     " (conflicts with booking " + conflicts.get(0).getBookingNumber() + ")");
         }
 
@@ -898,6 +912,8 @@ public class BookingService {
         createRequest.setPickupDate(req.getPickupDate());
         createRequest.setEventDate(req.getEventDate());
         createRequest.setReturnDate(req.getReturnDate());
+        createRequest.setPickupTime(req.getPickupTime());
+        createRequest.setReturnTime(req.getReturnTime());
         createRequest.setRentalAmount(req.getRentalAmount());
         createRequest.setAdvanceAmount(req.getAdvanceAmount());
         createRequest.setNotes(req.getNotes());
@@ -938,8 +954,9 @@ public class BookingService {
     @Transactional(readOnly = true)
     public Optional<List<BookingResponse>> getItemCalendar(Long itemId, LocalDate start, LocalDate end) {
         return itemRepository.findById(itemId)
-                .map(item -> toResponses(bookingRepository.findOverlapping(itemId, start, end, -1L).stream()
-                        .sorted((a, b) -> a.getPickupDate().compareTo(b.getPickupDate()))
+                .map(item -> toResponses(bookingRepository.findOverlapping(itemId,
+                                start.atStartOfDay(), end.atTime(LocalTime.of(23, 59)), -1L).stream()
+                        .sorted((a, b) -> a.pickupAt().compareTo(b.pickupAt()))
                         .toList()));
     }
 
@@ -949,6 +966,12 @@ public class BookingService {
     // keeps this method honest about what booking creation actually charges.
     // Once updateStatus() sets a real depositAmount at pickup time, that
     // value flows into balanceAmount there, not here.
+    /** "2026-01-29 13:30 to 2026-01-30 10:00" -- how a window is shown in conflict messages. */
+    private static String formatWindow(LocalDateTime from, LocalDateTime to) {
+        java.time.format.DateTimeFormatter f = java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
+        return from.format(f) + " to " + to.format(f);
+    }
+
     private BigDecimal computeBalance(CreateBookingRequest req) {
         return req.getRentalAmount()
                 .subtract(req.getAdvanceAmount() == null ? BigDecimal.ZERO : req.getAdvanceAmount());

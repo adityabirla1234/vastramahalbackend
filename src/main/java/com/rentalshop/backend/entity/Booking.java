@@ -11,6 +11,7 @@ import org.hibernate.annotations.UpdateTimestamp;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -44,6 +45,37 @@ public class Booking {
 
     @Column(name = "return_date", nullable = false)
     private LocalDate returnDate;
+
+    /**
+     * Time of day the item goes out, paired with [pickupDate]. Together they
+     * form the start of the window the item is occupied. Existing rows (and
+     * requests from older app builds that send no time) get 00:00, i.e. the
+     * whole pickup day is blocked exactly as before time-of-day existed.
+     */
+    @Column(name = "pickup_time", columnDefinition = "TIME DEFAULT '00:00:00'")
+    private LocalTime pickupTime = DEFAULT_PICKUP_TIME;
+
+    /**
+     * Time of day the item is expected back, paired with [returnDate]. The
+     * item is occupied up to AND including this minute, so with 13:30 here it
+     * can be booked again from 13:31. Existing rows / older clients get 23:59,
+     * i.e. the whole return day stays blocked exactly as before.
+     */
+    @Column(name = "return_time", columnDefinition = "TIME DEFAULT '23:59:00'")
+    private LocalTime returnTime = DEFAULT_RETURN_TIME;
+
+    public static final LocalTime DEFAULT_PICKUP_TIME = LocalTime.of(0, 0);
+    public static final LocalTime DEFAULT_RETURN_TIME = LocalTime.of(23, 59);
+
+    /** Start of the occupied window (pickup date + time). */
+    public LocalDateTime pickupAt() {
+        return LocalDateTime.of(pickupDate, pickupTime == null ? DEFAULT_PICKUP_TIME : pickupTime);
+    }
+
+    /** End of the occupied window (return date + time), inclusive. */
+    public LocalDateTime returnAt() {
+        return LocalDateTime.of(returnDate, returnTime == null ? DEFAULT_RETURN_TIME : returnTime);
+    }
 
     @Column(name = "rental_amount", nullable = false, precision = 10, scale = 2)
     private BigDecimal rentalAmount = BigDecimal.ZERO;

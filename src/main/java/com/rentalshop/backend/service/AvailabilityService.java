@@ -7,6 +7,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.util.List;
 
 @Service
@@ -28,11 +30,16 @@ public class AvailabilityService {
      * double-booking.
      */
     @Transactional(readOnly = true)
-    public List<ItemResponse> searchAvailable(LocalDate start, LocalDate end, String category) {
-        if (end.isBefore(start)) {
-            throw new IllegalArgumentException("end date cannot be before start date");
+    public List<ItemResponse> searchAvailable(LocalDate start, LocalTime startTime,
+                                              LocalDate end, LocalTime endTime, String category) {
+        // No time sent (older app builds) = the whole day: start of the pickup
+        // day through the last minute of the return day.
+        LocalDateTime from = LocalDateTime.of(start, startTime == null ? LocalTime.of(0, 0) : startTime);
+        LocalDateTime to = LocalDateTime.of(end, endTime == null ? LocalTime.of(23, 59) : endTime);
+        if (to.isBefore(from)) {
+            throw new IllegalArgumentException("end date/time cannot be before start date/time");
         }
-        return itemRepository.findAvailableInRange(start, end, category)
+        return itemRepository.findAvailableInRange(from, to, category)
                 .stream()
                 .map(ItemResponse::from)
                 .toList();

@@ -6,6 +6,8 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
@@ -30,7 +32,12 @@ public interface BookingRepository extends JpaRepository<Booking, Long> {
     Optional<Booking> findByIdWithDetails(@Param("id") Long id);
 
     /**
-     * Section 3.8 overlap rule: existingStart <= requestedEnd AND existingEnd >= requestedStart.
+     * Section 3.8 overlap rule, now down to the minute:
+     * existingStart <= requestedEnd AND existingEnd >= requestedStart, where
+     * each side is a date + time. Both ends are inclusive, so an item due back
+     * 29 Jan 13:30 conflicts with a request starting 13:30 but NOT one
+     * starting 13:31.
+     *
      * Only bookings in a calendar-occupying status are considered (Cancelled bookings
      * release their dates immediately per Section 14, rule 6; Returned bookings don't
      * block future dates per rule 7).
@@ -39,33 +46,49 @@ public interface BookingRepository extends JpaRepository<Booking, Long> {
      * edit, so it doesn't conflict with itself. Pass -1L (or any impossible id)
      * when creating a brand-new booking.
      */
+    default List<Booking> findOverlapping(Long itemId, LocalDateTime requestedStart,
+                                          LocalDateTime requestedEnd, Long excludeBookingId) {
+        return findOverlappingParts(itemId,
+                requestedStart.toLocalDate(), requestedStart.toLocalTime(),
+                requestedEnd.toLocalDate(), requestedEnd.toLocalTime(),
+                excludeBookingId);
+    }
+
     @Query("""
            select b from Booking b
            where b.item.id = :itemId
              and b.status in ('PENDING', 'CONFIRMED', 'PICKED_UP')
              and b.id <> :excludeBookingId
-             and b.pickupDate <= :requestedEnd
-             and b.returnDate >= :requestedStart
+             and (b.pickupDate < :endDate or (b.pickupDate = :endDate and b.pickupTime <= :endTime))
+             and (b.returnDate > :startDate or (b.returnDate = :startDate and b.returnTime >= :startTime))
            """)
-    List<Booking> findOverlapping(@Param("itemId") Long itemId,
-                                   @Param("requestedStart") LocalDate requestedStart,
-                                   @Param("requestedEnd") LocalDate requestedEnd,
-                                   @Param("excludeBookingId") Long excludeBookingId);
+    List<Booking> findOverlappingParts(@Param("itemId") Long itemId,
+                                       @Param("startDate") LocalDate startDate,
+                                       @Param("startTime") LocalTime startTime,
+                                       @Param("endDate") LocalDate endDate,
+                                       @Param("endTime") LocalTime endTime,
+                                       @Param("excludeBookingId") Long excludeBookingId);
 
     /**
      * Section 3.6 availability search: items with NO overlapping booking in the
-     * requested range are available. Used as an anti-join from the item side —
-     * see AvailabilityService (not included in this scaffold) for the full query
-     * that combines this with the items table.
+     * requested range are available. Same minute-level rule as findOverlapping.
      */
+    default List<Long> findBookedItemIdsInRange(LocalDateTime requestedStart, LocalDateTime requestedEnd) {
+        return findBookedItemIdsInRangeParts(
+                requestedStart.toLocalDate(), requestedStart.toLocalTime(),
+                requestedEnd.toLocalDate(), requestedEnd.toLocalTime());
+    }
+
     @Query("""
            select b.item.id from Booking b
            where b.status in ('PENDING', 'CONFIRMED', 'PICKED_UP')
-             and b.pickupDate <= :requestedEnd
-             and b.returnDate >= :requestedStart
+             and (b.pickupDate < :endDate or (b.pickupDate = :endDate and b.pickupTime <= :endTime))
+             and (b.returnDate > :startDate or (b.returnDate = :startDate and b.returnTime >= :startTime))
            """)
-    List<Long> findBookedItemIdsInRange(@Param("requestedStart") LocalDate requestedStart,
-                                         @Param("requestedEnd") LocalDate requestedEnd);
+    List<Long> findBookedItemIdsInRangeParts(@Param("startDate") LocalDate startDate,
+                                             @Param("startTime") LocalTime startTime,
+                                             @Param("endDate") LocalDate endDate,
+                                             @Param("endTime") LocalTime endTime);
 
     /**
      * Backs GET /api/bookings (All Bookings / Returns / Item Calendar /

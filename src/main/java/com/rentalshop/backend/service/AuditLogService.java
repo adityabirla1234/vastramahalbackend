@@ -210,6 +210,8 @@ public class AuditLogService {
         m.put("pickupDate", booking.getPickupDate());
         m.put("eventDate", booking.getEventDate());
         m.put("returnDate", booking.getReturnDate());
+        m.put("pickupTime", booking.getPickupTime());
+        m.put("returnTime", booking.getReturnTime());
         m.put("rentalAmount", booking.getRentalAmount());
         m.put("depositAmount", booking.getDepositAmount());
         m.put("depositPaymentMethod", booking.getDepositPaymentMethod());

@@ -8,6 +8,8 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
@@ -48,6 +50,19 @@ public interface ItemRepository extends JpaRepository<Item, Long> {
      * query planner can use the idx_booking_item_dates index for the
      * correlated lookup per item.
      */
+    default List<Item> findAvailableInRange(LocalDateTime requestedStart, LocalDateTime requestedEnd,
+                                            String category) {
+        return findAvailableInRangeParts(
+                requestedStart.toLocalDate(), requestedStart.toLocalTime(),
+                requestedEnd.toLocalDate(), requestedEnd.toLocalTime(),
+                category);
+    }
+
+    /**
+     * Date + time version of the overlap test (see BookingRepository.findOverlapping):
+     * a booking blocks the item when it starts at or before the requested end
+     * AND ends at or after the requested start, compared down to the minute.
+     */
     @Query("""
            select i from Item i
            where i.status = 'ACTIVE'
@@ -56,14 +71,16 @@ public interface ItemRepository extends JpaRepository<Item, Long> {
                  select 1 from Booking b
                  where b.item = i
                    and b.status in ('PENDING', 'CONFIRMED', 'PICKED_UP')
-                   and b.pickupDate <= :requestedEnd
-                   and b.returnDate >= :requestedStart
+                   and (b.pickupDate < :endDate or (b.pickupDate = :endDate and b.pickupTime <= :endTime))
+                   and (b.returnDate > :startDate or (b.returnDate = :startDate and b.returnTime >= :startTime))
              )
            order by i.name
            """)
-    List<Item> findAvailableInRange(@Param("requestedStart") LocalDate requestedStart,
-                                     @Param("requestedEnd") LocalDate requestedEnd,
-                                     @Param("category") String category);
+    List<Item> findAvailableInRangeParts(@Param("startDate") LocalDate startDate,
+                                         @Param("startTime") LocalTime startTime,
+                                         @Param("endDate") LocalDate endDate,
+                                         @Param("endTime") LocalTime endTime,
+                                         @Param("category") String category);
 
     /**
      * Backs the inventory list screen. category and status are both

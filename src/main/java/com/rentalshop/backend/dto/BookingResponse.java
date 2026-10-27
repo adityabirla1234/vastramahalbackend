@@ -1,11 +1,13 @@
 package com.rentalshop.backend.dto;
 
+import com.fasterxml.jackson.annotation.JsonFormat;
 import com.rentalshop.backend.entity.Booking;
 import lombok.Getter;
 import lombok.Builder;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.LocalTime;
 import java.util.List;
 
 @Getter
@@ -48,6 +50,11 @@ public class BookingResponse {
     private LocalDate pickupDate;
     private LocalDate eventDate;
     private LocalDate returnDate;
+    /** Time of day for pickupDate / returnDate, "HH:mm" (defaults 00:00 / 23:59 for older rows). */
+    @JsonFormat(pattern = "HH:mm")
+    private LocalTime pickupTime;
+    @JsonFormat(pattern = "HH:mm")
+    private LocalTime returnTime;
     private BigDecimal rentalAmount;
     private BigDecimal depositAmount;
     /** "Cash" / "UPI" / "Card" -- how the security deposit was paid. Null when there was none, or for older rows. */
@@ -125,6 +132,8 @@ public class BookingResponse {
                 .pickupDate(b.getPickupDate())
                 .eventDate(b.getEventDate())
                 .returnDate(b.getReturnDate())
+                .pickupTime(b.getPickupTime())
+                .returnTime(b.getReturnTime())
                 .rentalAmount(b.getRentalAmount())
                 .depositAmount(b.getDepositAmount())
                 .depositPaymentMethod(b.getDepositPaymentMethod())

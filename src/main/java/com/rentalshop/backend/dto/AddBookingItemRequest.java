@@ -9,6 +9,7 @@ import lombok.Setter;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.LocalTime;
 import java.util.List;
 
 /**
@@ -40,6 +41,15 @@ public class AddBookingItemRequest {
 
     @NotNull
     private LocalDate returnDate;
+
+    /**
+     * Time of day for {pickup,return}Date, "HH:mm". Optional: older app builds
+     * omit it, in which case pickup defaults to 00:00 and return to 23:59
+     * (whole days blocked, the pre-time behaviour). An item is occupied up to
+     * and including the return minute and can be booked again from the next one.
+     */
+    private LocalTime pickupTime;
+    private LocalTime returnTime;
 
     @NotNull
     @DecimalMin("0.0")
