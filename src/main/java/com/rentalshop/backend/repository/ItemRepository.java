@@ -71,7 +71,7 @@ public interface ItemRepository extends JpaRepository<Item, Long> {
     @Query("""
            select i from Item i
            where i.status = 'ACTIVE'
-             and (:category is null or lower(i.category) = lower(:category))
+             and (:category = '' or lower(i.category) = :category)
              and not exists (
                  select 1 from Booking b
                  where b.item = i
@@ -81,11 +81,28 @@ public interface ItemRepository extends JpaRepository<Item, Long> {
              )
            order by lower(i.name), i.name
            """)
-    List<Item> findAvailableInRangeParts(@Param("startDate") LocalDate startDate,
-                                         @Param("startTime") LocalTime startTime,
-                                         @Param("endDate") LocalDate endDate,
-                                         @Param("endTime") LocalTime endTime,
-                                         @Param("category") String category);
+    List<Item> findAvailableInRangePartsFiltered(@Param("startDate") LocalDate startDate,
+                                                 @Param("startTime") LocalTime startTime,
+                                                 @Param("endDate") LocalDate endDate,
+                                                 @Param("endTime") LocalTime endTime,
+                                                 @Param("category") String category);
+
+    /**
+     * PostgreSQL cannot infer the type of a NULL bind parameter, so a null
+     * category used to fail with "function lower(bytea) does not exist".
+     * The category is therefore normalised here to a lower-case string that
+     * is never null ("" = no category filter).
+     */
+    default List<Item> findAvailableInRangeParts(LocalDate startDate, LocalTime startTime,
+                                                 LocalDate endDate, LocalTime endTime,
+                                                 String category) {
+        return findAvailableInRangePartsFiltered(startDate, startTime, endDate, endTime,
+                normalizeCategory(category));
+    }
+
+    static String normalizeCategory(String category) {
+        return category == null ? "" : category.strip().toLowerCase(java.util.Locale.ROOT);
+    }
 
     /**
      * Backs the inventory list screen. category and status are both
@@ -93,12 +110,20 @@ public interface ItemRepository extends JpaRepository<Item, Long> {
      */
     @Query("""
            select i from Item i
-           where (:category is null or lower(i.category) = lower(:category))
-             and (:status is null or i.status = :status)
+           where (:category = '' or lower(i.category) = :category)
+             and (:hasStatus = false or i.status = :status)
            order by lower(i.name), i.name
            """)
-    List<Item> search(@Param("category") String category,
-                       @Param("status") Item.ItemStatus status);
+    List<Item> searchFiltered(@Param("category") String category,
+                              @Param("hasStatus") boolean hasStatus,
+                              @Param("status") Item.ItemStatus status);
+
+    /** Same null-parameter workaround as findAvailableInRangeParts. */
+    default List<Item> search(String category, Item.ItemStatus status) {
+        return searchFiltered(normalizeCategory(category),
+                status != null,
+                status == null ? Item.ItemStatus.ACTIVE : status);
+    }
 
     /**
      * Backs the New Booking form's "Add accessory" picker: every bookable
