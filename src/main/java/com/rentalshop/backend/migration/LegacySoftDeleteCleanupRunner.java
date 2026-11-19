@@ -66,12 +66,10 @@ public class LegacySoftDeleteCleanupRunner implements ApplicationRunner {
             return;
         }
         int purged = jdbcTemplate.update("""
-                DELETE items FROM items
-                LEFT JOIN bookings b ON b.item_id = items.id
-                LEFT JOIN booking_accessories ba ON ba.item_id = items.id
+                DELETE FROM items
                 WHERE items.is_deleted = TRUE
-                  AND b.id IS NULL
-                  AND ba.id IS NULL
+                  AND NOT EXISTS (SELECT 1 FROM bookings b WHERE b.item_id = items.id)
+                  AND NOT EXISTS (SELECT 1 FROM booking_accessories ba WHERE ba.item_id = items.id)
                 """);
         if (purged > 0) {
             log.info("Legacy soft-delete cleanup: removed {} stale item row(s) with no booking history, freeing up their item_code(s)", purged);
@@ -84,10 +82,9 @@ public class LegacySoftDeleteCleanupRunner implements ApplicationRunner {
             return;
         }
         int purged = jdbcTemplate.update("""
-                DELETE customers FROM customers
-                LEFT JOIN bookings b ON b.customer_id = customers.id
+                DELETE FROM customers
                 WHERE customers.is_deleted = TRUE
-                  AND b.id IS NULL
+                  AND NOT EXISTS (SELECT 1 FROM bookings b WHERE b.customer_id = customers.id)
                 """);
         if (purged > 0) {
             log.info("Legacy soft-delete cleanup: removed {} stale customer row(s) with no booking history", purged);
@@ -98,7 +95,7 @@ public class LegacySoftDeleteCleanupRunner implements ApplicationRunner {
     private boolean columnExists(String table, String column) {
         Integer count = jdbcTemplate.queryForObject("""
                 SELECT COUNT(*) FROM information_schema.columns
-                WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?
+                WHERE table_schema = current_schema() AND table_name = ? AND column_name = ?
                 """, Integer.class, table, column);
         return count != null && count > 0;
     }

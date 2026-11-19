@@ -1,27 +1,28 @@
-name: Aiven MySQL Keep-Alive
+name: Supabase PostgreSQL Keep-Alive
 
 on:
   schedule:
-    # Runs once a day at 5:30 AM UTC. Aiven's free-tier power-off is based
-    # on days of total inactivity, not minutes, so a daily ping is enough --
-    # no need to run this as often as the Render /actuator/health cron.
+    # Runs once a day at 5:30 AM UTC. Supabase pauses free-tier projects
+    # after 7 days of total inactivity, so a daily query is plenty -- no
+    # need to run this as often as the Render /actuator/health cron.
     - cron: '30 5 * * *'
   workflow_dispatch: {}   # lets you trigger it manually from the Actions tab to test
 
 jobs:
-  ping-aiven:
+  ping-supabase:
     runs-on: ubuntu-latest
     steps:
-      - name: Install MySQL client
-        run: sudo apt-get update && sudo apt-get install -y mysql-client
+      - name: Install PostgreSQL client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
 
-      - name: Run keep-alive query against Aiven
-        run: |
-          mysql --host="$DB_HOST" --port="$DB_PORT" --user="$DB_USERNAME" \
-                --password="$DB_PASSWORD" --ssl-mode=REQUIRED \
-                -e "SELECT NOW();"
+      - name: Run keep-alive query against Supabase
+        run: psql -v ON_ERROR_STOP=1 -c "SELECT NOW();"
         env:
-          DB_HOST: ${{ secrets.AIVEN_DB_HOST }}
-          DB_PORT: ${{ secrets.AIVEN_DB_PORT }}
-          DB_USERNAME: ${{ secrets.AIVEN_DB_USERNAME }}
-          DB_PASSWORD: ${{ secrets.AIVEN_DB_PASSWORD }}
+          # Session pooler values from Supabase dashboard > Connect.
+          PGHOST: ${{ secrets.SUPABASE_DB_HOST }}          # aws-0-<region>.pooler.supabase.com
+          PGPORT: ${{ secrets.SUPABASE_DB_PORT }}          # 5432
+          PGDATABASE: ${{ secrets.SUPABASE_DB_NAME }}      # postgres
+          PGUSER: ${{ secrets.SUPABASE_DB_USERNAME }}      # postgres.<project-ref>
+          PGPASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+          PGSSLMODE: require
+          PGCONNECT_TIMEOUT: "20"

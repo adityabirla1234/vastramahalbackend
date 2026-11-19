@@ -54,7 +54,7 @@ import java.util.stream.Collectors;
  *
  *   1. Idempotency key (unique DB constraint on bookings.idempotency_key) —
  *      protects against the SAME logical request being retried by the app
- *      after a timeout (e.g. cold-start delay on Aiven/Render free tier).
+ *      after a timeout (e.g. cold-start delay on Supabase/Render free tier).
  *
  *   2. Pessimistic row lock on the item + a fresh overlap query inside the
  *      SAME transaction — protects against TWO DIFFERENT booking requests
@@ -163,12 +163,12 @@ public class BookingService {
      * Creates a booking, or returns the existing one if this exact
      * idempotencyKey was already processed successfully.
      *
-     * Isolation.READ_COMMITTED is explicit here (MySQL's InnoDB default is
-     * REPEATABLE READ) because the correctness of this method does NOT rely on
+     * Isolation.READ_COMMITTED is explicit here (it is also PostgreSQL's
+     * default) because the correctness of this method does NOT rely on
      * snapshot isolation — it relies entirely on the explicit pessimistic lock
-     * below, which works correctly under READ_COMMITTED and avoids extra
-     * gap-lock/next-key-lock surprises that REPEATABLE READ can introduce
-     * under high concurrency on this access pattern.
+     * below, which works correctly under READ_COMMITTED and avoids the
+     * serialization failures REPEATABLE READ would raise under concurrent
+     * writes on this access pattern.
      */
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public BookingResponse createBooking(CreateBookingRequest req) {

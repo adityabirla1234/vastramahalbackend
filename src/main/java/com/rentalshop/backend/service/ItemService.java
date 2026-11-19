@@ -48,7 +48,7 @@ public class ItemService {
                 return ItemResponse.from(existing.get());
             }
         }
-        if (itemRepository.existsByItemCode(req.getItemCode())) {
+        if (itemRepository.existsByItemCodeIgnoreCase(req.getItemCode())) {
             throw new IllegalArgumentException("itemCode already in use: " + req.getItemCode());
         }
 

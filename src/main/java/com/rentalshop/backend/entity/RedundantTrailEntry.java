@@ -5,19 +5,21 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 import org.hibernate.annotations.CreationTimestamp;
+import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.annotations.UpdateTimestamp;
+import org.hibernate.type.SqlTypes;
 
 import java.time.LocalDateTime;
 
 /**
- * One row per mutation that needs to survive OUTSIDE the primary Aiven
- * MySQL database (schema.sql's redundant_trail_entries table) -- the
+ * One row per mutation that needs to survive OUTSIDE the primary Supabase
+ * PostgreSQL database (schema.sql's redundant_trail_entries table) -- the
  * Layer-3 "Telegram/Sheets redundant trail" the plan describes. This is a
  * DIFFERENT concern from {@link AuditLog}: audit_logs is the queryable
  * in-DB history for the app itself (System Health screen, per-record
  * history), while this table is a delivery QUEUE whose entire purpose is
  * to get a copy of every mutation somewhere that does NOT go down with the
- * Aiven instance -- a Telegram chat and/or a Google Sheet.
+ * Supabase project -- a Telegram chat and/or a Google Sheet.
  *
  * Two independent delivery channels are tracked per row rather than one
  * combined status, since Telegram and Sheets are meant to be redundant
@@ -55,10 +57,12 @@ public class RedundantTrailEntry {
     @Column(name = "actor_id")
     private Long actorId;
 
-    @Column(name = "before_state", columnDefinition = "json")
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "before_state", columnDefinition = "jsonb")
     private String beforeState;
 
-    @Column(name = "after_state", columnDefinition = "json")
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "after_state", columnDefinition = "jsonb")
     private String afterState;
 
     @Enumerated(EnumType.STRING)

@@ -31,7 +31,7 @@ EXPOSE 8080
 
 # Explicit heap/metaspace caps instead of relying on the JVM's container-aware
 # auto-sizing (~25% of the cgroup limit by default) -- firebase-admin (gRPC +
-# Netty), webp-imageio's native binding, mysql-connector-j, and full
+# Netty), webp-imageio's native binding, the PostgreSQL JDBC driver, and full
 # Hibernate/JPA all classload during startup, and on Render's smaller tiers
 # that default guess can be too generous, letting the JVM get killed by the
 # host before it ever prints a clean OutOfMemoryError. Tune these to roughly

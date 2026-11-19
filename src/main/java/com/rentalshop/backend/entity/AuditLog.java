@@ -5,6 +5,8 @@ import lombok.Getter;
 import lombok.Setter;
 import lombok.NoArgsConstructor;
 import org.hibernate.annotations.CreationTimestamp;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 import java.time.LocalDateTime;
 
@@ -16,11 +18,13 @@ import java.time.LocalDateTime;
  * [beforeState] / [afterState] are stored as plain JSON text, not a
  * structured JPA embeddable -- what gets logged differs per entity type
  * (a booking snapshot has different fields than a payment snapshot), and
- * schema.sql already types these columns JSON specifically so an admin can
- * query into them directly with MySQL's JSON_EXTRACT if ever needed,
+ * schema.sql already types these columns JSONB specifically so an admin can
+ * query into them directly with PostgreSQL's -> / ->> operators if ever needed,
  * without this app owning a rigid Java shape for every possible snapshot.
  * AuditLogService is responsible for producing valid JSON text (via Jackson)
- * before it ever reaches this entity.
+ * before it ever reaches this entity; @JdbcTypeCode(SqlTypes.JSON) is what
+ * lets that String be bound to a jsonb column (PostgreSQL refuses a plain
+ * varchar parameter there).
  */
 @Entity
 @Table(name = "audit_logs")
@@ -46,10 +50,12 @@ public class AuditLog {
     @Column(name = "entity_id", nullable = false)
     private Long entityId;
 
-    @Column(name = "before_state", columnDefinition = "json")
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "before_state", columnDefinition = "jsonb")
     private String beforeState;
 
-    @Column(name = "after_state", columnDefinition = "json")
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "after_state", columnDefinition = "jsonb")
     private String afterState;
 
     @CreationTimestamp

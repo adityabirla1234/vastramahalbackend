@@ -16,9 +16,14 @@ import java.util.Optional;
 
 public interface ItemRepository extends JpaRepository<Item, Long> {
 
-    Optional<Item> findByItemCode(String itemCode);
+    /**
+     * IgnoreCase keeps the behaviour the shop had on MySQL, whose default
+     * collation treated "dress-001" and "DRESS-001" as the same item_code.
+     * PostgreSQL compares strings case-sensitively.
+     */
+    Optional<Item> findByItemCodeIgnoreCase(String itemCode);
 
-    boolean existsByItemCode(String itemCode);
+    boolean existsByItemCodeIgnoreCase(String itemCode);
 
     Optional<Item> findByIdempotencyKey(String idempotencyKey);
 
@@ -27,7 +32,7 @@ public interface ItemRepository extends JpaRepository<Item, Long> {
      * transaction acquires this lock FIRST, before checking for date overlaps.
      * This is what actually prevents the race condition where two concurrent
      * requests both read "no conflict" and both insert a booking for the
-     * same overlapping range — MySQL's default REPEATABLE READ isolation
+     * same overlapping range — PostgreSQL's default READ COMMITTED isolation
      * does NOT prevent that on its own for a read-then-insert pattern.
      *
      * Because every booking transaction for a given item always takes this
@@ -66,7 +71,7 @@ public interface ItemRepository extends JpaRepository<Item, Long> {
     @Query("""
            select i from Item i
            where i.status = 'ACTIVE'
-             and (:category is null or i.category = :category)
+             and (:category is null or lower(i.category) = lower(:category))
              and not exists (
                  select 1 from Booking b
                  where b.item = i
@@ -74,7 +79,7 @@ public interface ItemRepository extends JpaRepository<Item, Long> {
                    and (b.pickupDate < :endDate or (b.pickupDate = :endDate and b.pickupTime <= :endTime))
                    and (b.returnDate > :startDate or (b.returnDate = :startDate and b.returnTime >= :startTime))
              )
-           order by i.name
+           order by lower(i.name), i.name
            """)
     List<Item> findAvailableInRangeParts(@Param("startDate") LocalDate startDate,
                                          @Param("startTime") LocalTime startTime,
@@ -88,9 +93,9 @@ public interface ItemRepository extends JpaRepository<Item, Long> {
      */
     @Query("""
            select i from Item i
-           where (:category is null or i.category = :category)
+           where (:category is null or lower(i.category) = lower(:category))
              and (:status is null or i.status = :status)
-           order by i.name
+           order by lower(i.name), i.name
            """)
     List<Item> search(@Param("category") String category,
                        @Param("status") Item.ItemStatus status);
@@ -124,7 +129,7 @@ public interface ItemRepository extends JpaRepository<Item, Long> {
            where i.status = 'ACTIVE'
              and (lower(trim(i.category)) in :matchTerms
                   or lower(trim(i.subCategory)) in :matchTerms)
-           order by i.name
+           order by lower(i.name), i.name
            """)
     List<Item> findAccessoryCandidates(@Param("matchTerms") Collection<String> matchTerms);
 }

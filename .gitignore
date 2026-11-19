@@ -31,3 +31,8 @@ build/
 
 ### VS Code ###
 .vscode/
+
+### PostgreSQL migration (local secrets and tooling) ###
+postgreSQL_migration/.env
+postgreSQL_migration/.venv/
+postgreSQL_migration/*.pem

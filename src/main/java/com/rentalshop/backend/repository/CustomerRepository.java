@@ -23,7 +23,7 @@ public interface CustomerRepository extends JpaRepository<Customer, Long> {
            where (:query is null or :query = ''
                   or lower(c.name) like lower(concat('%', :query, '%'))
                   or c.phone like concat('%', :query, '%'))
-           order by c.name
+           order by lower(c.name), c.name
            """)
     List<Customer> search(@Param("query") String query);
 }

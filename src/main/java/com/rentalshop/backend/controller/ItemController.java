@@ -39,7 +39,7 @@ public class ItemController {
      */
     @GetMapping("/by-code/{itemCode}")
     public ResponseEntity<ItemResponse> findByCode(@PathVariable String itemCode) {
-        return itemRepository.findByItemCode(itemCode)
+        return itemRepository.findByItemCodeIgnoreCase(itemCode)
                 .map(this::withImages)
                 .map(ResponseEntity::ok)
                 .orElseGet(() -> ResponseEntity.notFound().build());

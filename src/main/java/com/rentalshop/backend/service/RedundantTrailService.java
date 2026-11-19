@@ -20,7 +20,7 @@ import java.util.List;
 /**
  * Layer 3 of the plan: an external, out-of-database trail of every
  * mutation (Telegram messages, Google Sheet rows) so the shop's data can
- * be reconstructed even if the primary Aiven MySQL instance is lost
+ * be reconstructed even if the primary Supabase PostgreSQL database is lost
  * entirely -- Layer 1 is the DB itself, Layer 2 is the GitHub Actions
  * backup pipeline (still not built), this is Layer 3.
  *
